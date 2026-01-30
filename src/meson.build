@@ -54,7 +54,7 @@ gatebench_exe = executable(
 )
 
 if get_option('buildtype') == 'debug'
-  summary('Debug build enabled via buildtype=debug', section: 'Build Targets')
+  summary({'Debug build enabled via buildtype=debug': true}, section: 'Build Targets')
 endif
 
 # Install headers (optional - for development)

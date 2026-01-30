@@ -71,9 +71,6 @@ math_dep = cc.find_library('m', required: true)
 # Include directories
 incdir = include_directories('include')
 
-# Subdirectories
-subdir('src')
-
 # Build options
 debug_opts = get_option('debug')
 if debug_opts
@@ -85,10 +82,13 @@ if verbose_logs
   add_project_arguments('-DVERBOSE_LOGS', language: 'c')
 endif
 
+# Subdirectories
+subdir('src')
+
 # Handle sanitizer options
 sanitizer = get_option('b_sanitize')
 if sanitizer != 'none'
-  summary('Sanitizer enabled: ' + sanitizer, section: 'Build Configuration')
+  summary({'Sanitizer enabled': sanitizer}, section: 'Build Configuration')
 endif
 
 # Installation
