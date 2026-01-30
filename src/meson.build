@@ -26,6 +26,9 @@ gatebench_sources = files(
   'selftests/test_multiple_entries.c',
   'selftests/test_malformed_nesting.c',
   'selftests/test_bad_attribute_size.c',
+  'selftests/test_param_validation.c',
+  'selftests/test_replace_invalid.c',
+  'selftests/test_large_dump.c',
 )
 
 # Headers (for dependency tracking)
