@@ -5,3 +5,9 @@ option('install_headers',
   description: 'Install development headers',
   value: false
 )
+
+option('verbose_logs',
+  type: 'boolean',
+  description: 'Enable verbose logging',
+  value: false
+)

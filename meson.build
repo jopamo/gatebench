@@ -80,6 +80,11 @@ if debug_opts
   add_project_arguments('-DDEBUG', language: 'c')
 endif
 
+verbose_logs = get_option('verbose_logs')
+if verbose_logs
+  add_project_arguments('-DVERBOSE_LOGS', language: 'c')
+endif
+
 # Handle sanitizer options
 sanitizer = get_option('b_sanitize')
 if sanitizer != 'none'
@@ -109,6 +114,7 @@ summary({
   'Warning level': get_option('warning_level'),
   'Werror': get_option('werror'),
   'Sanitizer': sanitizer,
+  'Verbose logs': verbose_logs,
 }, section: 'Build Configuration')
 
 summary({
