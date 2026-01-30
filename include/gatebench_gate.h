@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <linux/rtnetlink.h>
 #include <linux/pkt_cls.h>
+#include <linux/tc_act/tc_gate.h>
 #include "gatebench_nl.h"
 
 /* Forward declaration - defined in gatebench.h */
@@ -40,43 +41,6 @@ struct gate_shape;
 
 /* Use priority slot 1 for action nesting */
 #define GATEBENCH_ACT_PRIO 1
-
-/* Gate-specific attribute types - from linux/tc_act/tc_gate.h */
-#ifndef TCA_GATE_PARMS
-#define TCA_GATE_PARMS          2
-#define TCA_GATE_PAD            3
-#define TCA_GATE_PRIORITY       4
-#define TCA_GATE_ENTRY_LIST     6
-#define TCA_GATE_BASE_TIME      7
-#define TCA_GATE_CYCLE_TIME     8
-#define TCA_GATE_CYCLE_TIME_EXT 9
-#define TCA_GATE_FLAGS          10
-#define TCA_GATE_CLOCKID        11
-#endif
-
-/* Gate entry attribute types - from linux/tc_act/tc_gate.h */
-#ifndef TCA_GATE_ENTRY_UNSPEC
-#define TCA_GATE_ENTRY_UNSPEC     0
-#define TCA_GATE_ENTRY_INDEX      1
-#define TCA_GATE_ENTRY_GATE       2
-#define TCA_GATE_ENTRY_INTERVAL   3
-#define TCA_GATE_ENTRY_IPV        4
-#define TCA_GATE_ENTRY_MAX_OCTETS 5
-#endif
-
-/* TCA_GATE_ONE_ENTRY for nested entry attributes */
-#ifndef TCA_GATE_ONE_ENTRY
-#define TCA_GATE_ONE_ENTRY       1
-#endif
-
-/* tc_gate structure (simplified) */
-struct tc_gate {
-    uint32_t index;
-    uint32_t capab;
-    int      action;
-    int      refcnt;
-    int      bindcnt;
-};
 
 /* Gate entry */
 struct gate_entry {
