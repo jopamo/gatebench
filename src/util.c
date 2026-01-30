@@ -5,6 +5,7 @@
 #include <limits.h>
 #include <sched.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
