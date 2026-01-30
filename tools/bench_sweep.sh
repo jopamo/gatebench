@@ -74,8 +74,23 @@ while [ $entries -le $ENTRIES_END ]; do
     OUTPUT_FILE="${OUTPUT_DIR}/gatebench_${KERNEL}_entries${entries}_${TIMESTAMP}.json"
     
     # Build command
-    CMD="./gatebench"
-    CMD="$CMD --entries $entries"
+GATEBENCH_BIN="${GATEBENCH_BIN:-./build/src/gatebench}"
+
+# Check for binary in alternate locations if not found
+if [ ! -x "$GATEBENCH_BIN" ]; then
+    if [ -x "./gatebench" ]; then
+        GATEBENCH_BIN="./gatebench"
+    elif command -v gatebench >/dev/null 2>&1; then
+        GATEBENCH_BIN="gatebench"
+    else
+        echo "Error: gatebench binary not found at $GATEBENCH_BIN"
+        echo "Please build the project first or set GATEBENCH_BIN"
+        exit 1
+    fi
+fi
+
+CMD="$GATEBENCH_BIN"
+CMD="$CMD --entries $entries"
     CMD="$CMD --iters $ITERATIONS"
     CMD="$CMD --warmup $WARMUP"
     CMD="$CMD --runs $RUNS"
