@@ -1,4 +1,6 @@
-# gatebench
+<div style="background-color:#1e1e1e; padding:1em; display:inline-block; border-radius:8px; text-align:left;">
+  <img src="assets/gatebench.png" alt="logo" width="300" style="display:block; margin:0;">
+</div>
 
 A small, self-contained benchmark suite for Linux `tc gate` (act_gate) control-plane operations over rtnetlink.
 
@@ -16,24 +18,30 @@ A small, self-contained benchmark suite for Linux `tc gate` (act_gate) control-p
 ### Dependencies
 - `libmnl` (libmnl-dev on Debian/Ubuntu)
 - `gcc` or `clang`
-- `make`
+- `meson`
+- `ninja`
 
 ### Build commands
 ```bash
-# Standard build
-make
+# Setup build directory
+meson setup build
+
+# Compile
+meson compile -C build
 
 # Debug build (with symbols, no optimizations)
-make debug
+meson setup build_debug --buildtype=debug
+meson compile -C build_debug
 
 # AddressSanitizer build
-make asan
+meson setup build_asan -Db_sanitize=address
+meson compile -C build_asan
 
 # Clean
-make clean
+meson compile -C build --clean
 
 # Install (requires root)
-sudo make install
+sudo meson install -C build
 ```
 
 ## Usage
@@ -41,16 +49,16 @@ sudo make install
 ### Basic benchmark
 ```bash
 # Benchmark with 10 gate entries (default)
-sudo ./gatebench --entries 10
+sudo ./build/src/gatebench --entries 10
 
 # Benchmark with 100 entries, 1000 iterations
-sudo ./gatebench --entries 100 --iters 1000
+sudo ./build/src/gatebench --entries 100 --iters 1000
 
 # Run selftests before benchmark
-sudo ./gatebench --entries 50 --selftest
+sudo ./build/src/gatebench --entries 50 --selftest
 
 # Output JSON for machine processing
-sudo ./gatebench --entries 20 --json > results.json
+sudo ./build/src/gatebench --entries 20 --json > results.json
 ```
 
 ### Command-line options
@@ -119,7 +127,7 @@ python3 tools/bench_compare.py results/*.json --csv comparison.csv --plot
 ```
 gatebench/
 ├── README.md
-├── Makefile
+├── meson.build
 ├── include/
 │   ├── gatebench.h          # Core data structures
 │   ├── gatebench_cli.h      # Command-line interface
@@ -287,15 +295,17 @@ Summary:
 ### Testing
 ```bash
 # Run selftests
-sudo ./gatebench --selftest
+sudo ./build/gatebench --selftest
 
 # Build and run with debug symbols
-make debug
-sudo ./gatebench --entries 1 --iters 10 --runs 2
+meson setup build_debug --buildtype=debug
+meson compile -C build_debug
+sudo ./build_debug/gatebench --entries 1 --iters 10 --runs 2
 
 # Build with AddressSanitizer
-make asan
-sudo ./gatebench --entries 1 --iters 10
+meson setup build_asan -Db_sanitize=address
+meson compile -C build_asan
+sudo ./build_asan/gatebench --entries 1 --iters 10
 ```
 
 ### Adding new features
