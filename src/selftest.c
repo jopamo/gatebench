@@ -598,6 +598,90 @@ out:
     return test_ret;
 }
 
+static int test_clockid_variants(struct gb_nl_sock* sock, uint32_t base_index) {
+    struct gb_nl_msg* msg = NULL;
+    struct gb_nl_msg* resp = NULL;
+    struct gate_shape shape;
+    struct gate_entry entry;
+    struct gate_dump dump;
+    int ret;
+    int test_ret = 0;
+
+    /* Valid clock IDs to test */
+    uint32_t valid_clocks[] = {CLOCK_REALTIME, CLOCK_MONOTONIC, CLOCK_BOOTTIME, CLOCK_TAI};
+    size_t i;
+
+    shape.base_time = 0;
+    shape.cycle_time = 1000000;
+    shape.interval_ns = 1000000;
+    shape.entries = 1;
+
+    entry.gate_state = true;
+    entry.interval = 1000000;
+    entry.ipv = -1;
+    entry.maxoctets = -1;
+
+    msg = gb_nl_msg_alloc(gate_msg_capacity(1, 0));
+    resp = gb_nl_msg_alloc((size_t)MNL_SOCKET_BUFFER_SIZE);
+
+    if (!msg || !resp) {
+        test_ret = -ENOMEM;
+        goto out;
+    }
+
+    for (i = 0; i < sizeof(valid_clocks) / sizeof(valid_clocks[0]); i++) {
+        uint32_t clockid = valid_clocks[i];
+
+        /* Cleanup previous if any */
+        gb_nl_msg_reset(msg);
+        build_gate_delaction(msg, base_index);
+        gb_nl_send_recv(sock, msg, resp, 1000);
+
+        /* Create with specific clockid */
+        shape.clockid = clockid;
+        gb_nl_msg_reset(msg);
+        ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, NLM_F_CREATE | NLM_F_EXCL, 0, -1);
+        if (ret < 0) {
+            test_ret = ret;
+            goto out;
+        }
+
+        ret = gb_nl_send_recv(sock, msg, resp, 1000);
+        if (ret < 0) {
+            printf("Failed to create with clockid %u: %d\n", clockid, ret);
+            test_ret = ret;
+            goto cleanup;
+        }
+
+        /* Verify dump */
+        ret = gb_nl_get_action(sock, base_index, &dump, 1000);
+        if (ret < 0) {
+            test_ret = ret;
+            goto cleanup;
+        }
+
+        if (dump.clockid != clockid) {
+            printf("Clock ID mismatch: expected %u, got %u\n", clockid, dump.clockid);
+            test_ret = -EINVAL;
+            gb_gate_dump_free(&dump);
+            goto cleanup;
+        }
+        gb_gate_dump_free(&dump);
+    }
+
+cleanup:
+    gb_nl_msg_reset(msg);
+    build_gate_delaction(msg, base_index);
+    gb_nl_send_recv(sock, msg, resp, 1000);
+
+out:
+    if (msg)
+        gb_nl_msg_free(msg);
+    if (resp)
+        gb_nl_msg_free(resp);
+    return test_ret;
+}
+
 static const struct selftest tests[] = {
     {"create missing parms", test_create_missing_parms, -EINVAL},
     {"create missing entry list", test_create_missing_entries, -EINVAL},
@@ -608,6 +692,7 @@ static const struct selftest tests[] = {
     {"duplicate create", test_duplicate_create, -EEXIST},
     {"dump correctness", test_dump_correctness, 0},
     {"replace persistence", test_replace_persistence, 0},
+    {"clockid variants", test_clockid_variants, 0},
 };
 
 #define NUM_TESTS (sizeof(tests) / sizeof(tests[0]))
