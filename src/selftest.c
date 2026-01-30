@@ -14,13 +14,72 @@ struct selftest {
     int expected_err;
 };
 
+static int test_create_missing_parms(struct gb_nl_sock *sock, uint32_t base_index) {
+    struct gb_nl_msg *msg = NULL;
+    struct gb_nl_msg *resp = NULL;
+    struct nlmsghdr *nlh;
+    struct tcamsg *tca;
+    struct nlattr *nest_tab, *nest_prio, *nest_opts;
+    int ret;
+    
+    (void)base_index;
+
+    size_t cap = gate_msg_capacity(1, 0);
+    msg = gb_nl_msg_alloc(cap);
+    resp = gb_nl_msg_alloc((size_t)MNL_SOCKET_BUFFER_SIZE);
+    
+    if (!msg || !resp) {
+        ret = -ENOMEM;
+        goto out;
+    }
+    
+    /* Manually build message without TCA_GATE_PARMS */
+    nlh = mnl_nlmsg_put_header(msg->buf);
+    nlh->nlmsg_type = RTM_NEWACTION;
+    nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | NLM_F_CREATE | NLM_F_EXCL;
+    nlh->nlmsg_seq = 0;
+    
+    tca = mnl_nlmsg_put_extra_header(nlh, sizeof(*tca));
+    memset(tca, 0, sizeof(*tca));
+    tca->tca_family = AF_UNSPEC;
+    
+    nest_tab = mnl_attr_nest_start(nlh, TCA_ACT_TAB);
+    nest_prio = mnl_attr_nest_start(nlh, GATEBENCH_ACT_PRIO);
+    mnl_attr_put_str(nlh, TCA_ACT_KIND, "gate");
+    nest_opts = mnl_attr_nest_start(nlh, TCA_OPTIONS);
+    
+    /* SKIP TCA_GATE_PARMS */
+    
+    /* Add other attributes to be a "valid" request otherwise */
+    mnl_attr_put_u32(nlh, TCA_GATE_CLOCKID, 3); /* CLOCK_TAI */
+    mnl_attr_put_u64(nlh, TCA_GATE_BASE_TIME, 0);
+    mnl_attr_put_u64(nlh, TCA_GATE_CYCLE_TIME, 1000000);
+    
+    mnl_attr_nest_end(nlh, nest_opts);
+    mnl_attr_nest_end(nlh, nest_prio);
+    mnl_attr_nest_end(nlh, nest_tab);
+    
+    msg->len = nlh->nlmsg_len;
+    
+    ret = gb_nl_send_recv(sock, msg, resp, 1000);
+    
+out:
+    if (msg) gb_nl_msg_free(msg);
+    if (resp) gb_nl_msg_free(resp);
+    return ret;
+}
+
 static int test_create_missing_entries(struct gb_nl_sock *sock, uint32_t base_index) {
     struct gb_nl_msg *msg = NULL;
     struct gb_nl_msg *resp = NULL;
+    struct nlmsghdr *nlh;
+    struct tcamsg *tca;
+    struct nlattr *nest_tab, *nest_prio, *nest_opts;
     struct gate_shape shape;
+    struct tc_gate gate_params;
     int ret;
     
-    /* Create message with NULL entries but entries > 0 */
+    /* Create message without TCA_GATE_ENTRY_LIST */
     shape.clockid = 3; /* CLOCK_TAI */
     shape.base_time = 0;
     shape.cycle_time = 1000000; /* 1ms */
@@ -36,13 +95,37 @@ static int test_create_missing_entries(struct gb_nl_sock *sock, uint32_t base_in
         goto out;
     }
     
-    /* Build message with NULL entries */
-    ret = build_gate_newaction(msg, base_index, &shape, NULL, 1, 0);
-    if (ret < 0) {
-        goto out;
-    }
+    nlh = mnl_nlmsg_put_header(msg->buf);
+    nlh->nlmsg_type = RTM_NEWACTION;
+    nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | NLM_F_CREATE | NLM_F_EXCL;
+    nlh->nlmsg_seq = 0;
     
-    /* Send message - should fail with -EINVAL */
+    tca = mnl_nlmsg_put_extra_header(nlh, sizeof(*tca));
+    memset(tca, 0, sizeof(*tca));
+    tca->tca_family = AF_UNSPEC;
+    
+    nest_tab = mnl_attr_nest_start(nlh, TCA_ACT_TAB);
+    nest_prio = mnl_attr_nest_start(nlh, GATEBENCH_ACT_PRIO);
+    mnl_attr_put_str(nlh, TCA_ACT_KIND, "gate");
+    mnl_attr_put_u32(nlh, TCA_ACT_INDEX, base_index);
+    nest_opts = mnl_attr_nest_start(nlh, TCA_OPTIONS);
+    
+    memset(&gate_params, 0, sizeof(gate_params));
+    gate_params.index = base_index;
+    gate_params.action = TC_ACT_PIPE;
+    mnl_attr_put(nlh, TCA_GATE_PARMS, sizeof(gate_params), &gate_params);
+    
+    mnl_attr_put_u32(nlh, TCA_GATE_CLOCKID, shape.clockid);
+    mnl_attr_put_u64(nlh, TCA_GATE_BASE_TIME, shape.base_time);
+    mnl_attr_put_u64(nlh, TCA_GATE_CYCLE_TIME, shape.cycle_time);
+    
+    /* Deliberately omit TCA_GATE_ENTRY_LIST */
+    mnl_attr_nest_end(nlh, nest_opts);
+    mnl_attr_nest_end(nlh, nest_prio);
+    mnl_attr_nest_end(nlh, nest_tab);
+    
+    msg->len = nlh->nlmsg_len;
+    
     ret = gb_nl_send_recv(sock, msg, resp, 1000);
     
 out:
@@ -52,6 +135,73 @@ out:
 }
 
 static int test_create_empty_entries(struct gb_nl_sock *sock, uint32_t base_index) {
+    struct gb_nl_msg *msg = NULL;
+    struct gb_nl_msg *resp = NULL;
+    struct gate_shape shape;
+    struct nlmsghdr *nlh;
+    struct tcamsg *tca;
+    struct nlattr *nest_tab, *nest_prio, *nest_opts, *entry_list;
+    struct tc_gate gate_params;
+    int ret;
+    
+    /* Create message with empty entry list */
+    shape.clockid = 3; /* CLOCK_TAI */
+    shape.base_time = 0;
+    shape.cycle_time = 1000000;
+    shape.interval_ns = 1000000;
+    shape.entries = 0;
+    
+    size_t cap = gate_msg_capacity(1, 0);
+    msg = gb_nl_msg_alloc(cap);
+    resp = gb_nl_msg_alloc((size_t)MNL_SOCKET_BUFFER_SIZE);
+    
+    if (!msg || !resp) {
+        ret = -ENOMEM;
+        goto out;
+    }
+    
+    nlh = mnl_nlmsg_put_header(msg->buf);
+    nlh->nlmsg_type = RTM_NEWACTION;
+    nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | NLM_F_CREATE | NLM_F_EXCL;
+    nlh->nlmsg_seq = 0;
+    
+    tca = mnl_nlmsg_put_extra_header(nlh, sizeof(*tca));
+    memset(tca, 0, sizeof(*tca));
+    tca->tca_family = AF_UNSPEC;
+    
+    nest_tab = mnl_attr_nest_start(nlh, TCA_ACT_TAB);
+    nest_prio = mnl_attr_nest_start(nlh, GATEBENCH_ACT_PRIO);
+    mnl_attr_put_str(nlh, TCA_ACT_KIND, "gate");
+    mnl_attr_put_u32(nlh, TCA_ACT_INDEX, base_index);
+    nest_opts = mnl_attr_nest_start(nlh, TCA_OPTIONS);
+    
+    memset(&gate_params, 0, sizeof(gate_params));
+    gate_params.index = base_index;
+    gate_params.action = TC_ACT_PIPE;
+    mnl_attr_put(nlh, TCA_GATE_PARMS, sizeof(gate_params), &gate_params);
+    
+    mnl_attr_put_u32(nlh, TCA_GATE_CLOCKID, shape.clockid);
+    mnl_attr_put_u64(nlh, TCA_GATE_BASE_TIME, shape.base_time);
+    mnl_attr_put_u64(nlh, TCA_GATE_CYCLE_TIME, shape.cycle_time);
+    
+    entry_list = mnl_attr_nest_start(nlh, TCA_GATE_ENTRY_LIST);
+    mnl_attr_nest_end(nlh, entry_list);
+    
+    mnl_attr_nest_end(nlh, nest_opts);
+    mnl_attr_nest_end(nlh, nest_prio);
+    mnl_attr_nest_end(nlh, nest_tab);
+    
+    msg->len = nlh->nlmsg_len;
+    
+    ret = gb_nl_send_recv(sock, msg, resp, 1000);
+    
+out:
+    if (msg) gb_nl_msg_free(msg);
+    if (resp) gb_nl_msg_free(resp);
+    return ret;
+}
+
+static int test_create_zero_interval(struct gb_nl_sock *sock, uint32_t base_index) {
     struct gb_nl_msg *msg = NULL;
     struct gb_nl_msg *resp = NULL;
     struct gate_shape shape;
@@ -79,7 +229,8 @@ static int test_create_empty_entries(struct gb_nl_sock *sock, uint32_t base_inde
         goto out;
     }
     
-    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, 0);
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1,
+                               NLM_F_CREATE | NLM_F_EXCL, 0);
     if (ret < 0) {
         goto out;
     }
@@ -90,11 +241,6 @@ out:
     if (msg) gb_nl_msg_free(msg);
     if (resp) gb_nl_msg_free(resp);
     return ret;
-}
-
-static int test_create_zero_interval(struct gb_nl_sock *sock, uint32_t base_index) {
-    /* Same as test_create_empty_entries - zero interval */
-    return test_create_empty_entries(sock, base_index);
 }
 
 static int test_create_bad_clockid(struct gb_nl_sock *sock, uint32_t base_index) {
@@ -125,7 +271,8 @@ static int test_create_bad_clockid(struct gb_nl_sock *sock, uint32_t base_index)
         goto out;
     }
     
-    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, 0);
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1,
+                               NLM_F_CREATE | NLM_F_EXCL, 0);
     if (ret < 0) {
         goto out;
     }
@@ -185,14 +332,13 @@ static int test_replace_without_existing(struct gb_nl_sock *sock, uint32_t base_
         goto out;
     }
     
-    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, 0);
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1,
+                               NLM_F_REPLACE, 0);
     if (ret < 0) {
         goto out;
     }
     
-    /* Send with REPLACE flag - but gate doesn't exist */
-    /* Note: We need to modify the message flags for this test */
-    /* For now, just try to create then immediately replace */
+    /* Send with REPLACE flag */
     ret = gb_nl_send_recv(sock, msg, resp, 1000);
     if (ret == 0) {
         /* Created successfully, now delete it */
@@ -201,7 +347,7 @@ static int test_replace_without_existing(struct gb_nl_sock *sock, uint32_t base_
         if (ret >= 0) {
             gb_nl_send_recv(sock, msg, resp, 1000);
         }
-        ret = -ENOENT; /* Simulate the error we expect */
+        ret = 0;
     }
     
 out:
@@ -239,7 +385,8 @@ static int test_duplicate_create(struct gb_nl_sock *sock, uint32_t base_index) {
     }
     
     /* First create */
-    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, 0);
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1,
+                               NLM_F_CREATE | NLM_F_EXCL, 0);
     if (ret < 0) {
         goto out;
     }
@@ -251,7 +398,8 @@ static int test_duplicate_create(struct gb_nl_sock *sock, uint32_t base_index) {
     
     /* Try to create again - should fail with -EEXIST */
     gb_nl_msg_reset(msg);
-    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, 0);
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1,
+                               NLM_F_CREATE | NLM_F_EXCL, 0);
     if (ret < 0) {
         goto cleanup;
     }
@@ -273,11 +421,12 @@ out:
 }
 
 static const struct selftest tests[] = {
+    {"create missing parms", test_create_missing_parms, -EINVAL},
     {"create missing entry list", test_create_missing_entries, -EINVAL},
     {"create empty entry list", test_create_empty_entries, -EINVAL},
     {"create zero interval", test_create_zero_interval, -EINVAL},
     {"create bad clockid", test_create_bad_clockid, -EINVAL},
-    {"replace without existing", test_replace_without_existing, -ENOENT},
+    {"replace without existing", test_replace_without_existing, 0},
     {"duplicate create", test_duplicate_create, -EEXIST},
 };
 

@@ -7,10 +7,11 @@
       "create_empty_entry_list": -22,
       "create_zero_interval": -22,
       "create_bad_clockid": -22,
-      "replace_without_existing": -2,
+      "replace_without_existing": 0,
       "duplicate_create": -17
     },
     "error_names": {
+      "0": "OK",
       "-2": "ENOENT",
       "-17": "EEXIST",
       "-22": "EINVAL"

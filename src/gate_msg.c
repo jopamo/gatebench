@@ -7,90 +7,6 @@
 #include <string.h>
 #include <errno.h>
 
-/* Default netlink attributes */
-#define TCA_ACT_MAX_PRIO 1
-
-/* RTM types for tc actions - check if not already defined */
-#ifndef RTM_NEWACTION
-#define RTM_NEWACTION 48
-#define RTM_DELACTION 49
-#define RTM_GETACTION 50
-#endif
-
-    /* tc action constants */
-#ifndef TC_ACT_PIPE
-#define TC_ACT_PIPE 3
-#endif
-
-/* Netlink attribute types - check if not already defined */
-#ifndef TCA_ACT_KIND
-#define TCA_ACT_KIND     1
-#define TCA_ACT_OPTIONS  2
-#define TCA_ACT_INDEX    3
-#endif
-
-#ifndef TCA_OPTIONS
-#define TCA_OPTIONS TCA_ACT_OPTIONS
-#endif
-
-/* Gate-specific attribute types - from linux/tc_act/tc_gate.h */
-#ifndef TCA_GATE_PARMS
-#define TCA_GATE_PARMS          2
-#define TCA_GATE_PAD            3
-#define TCA_GATE_PRIORITY       4
-#define TCA_GATE_ENTRY_LIST     6
-#define TCA_GATE_BASE_TIME      7
-#define TCA_GATE_CYCLE_TIME     8
-#define TCA_GATE_CYCLE_TIME_EXT 9
-#define TCA_GATE_FLAGS          10
-#define TCA_GATE_CLOCKID        11
-#endif
-
-/* Gate entry attribute types - from linux/tc_act/tc_gate.h */
-#ifndef TCA_GATE_ENTRY_UNSPEC
-#define TCA_GATE_ENTRY_UNSPEC     0
-#define TCA_GATE_ENTRY_INDEX      1
-#define TCA_GATE_ENTRY_GATE       2
-#define TCA_GATE_ENTRY_INTERVAL   3
-#define TCA_GATE_ENTRY_IPV        4
-#define TCA_GATE_ENTRY_MAX_OCTETS 5
-#endif
-
-/* TCA_GATE_ONE_ENTRY for nested entry attributes */
-#ifndef TCA_GATE_ONE_ENTRY
-#define TCA_GATE_ONE_ENTRY       1
-#endif
-
-/* tc_gate structure (simplified) */
-struct tc_gate {
-    uint32_t index;
-    uint32_t capab;
-    int      action;
-    int      refcnt;
-    int      bindcnt;
-};
-
-/* tcmsg structure - in case it's not defined */
-struct tcmsg {
-    unsigned char tcm_family;
-    unsigned char tcm_pad1;
-    unsigned char tcm_pad2;
-    unsigned char tcm_pad3;
-    uint32_t tcm_ifindex;
-    uint32_t tcm_handle;
-    uint32_t tcm_parent;
-    uint32_t tcm_info;
-};
-
-/* tc constants if not defined */
-#ifndef TC_H_ROOT
-#define TC_H_ROOT       0xFFFFFFFFU
-#endif
-
-#ifndef TC_H_MAKE
-#define TC_H_MAKE(maj, min) (((maj) << 16) | (min))
-#endif
-
 /* Calculate approximate message size needed */
 size_t gate_msg_capacity(uint32_t entries, uint32_t flags) {
     size_t size = 0;
@@ -100,8 +16,8 @@ size_t gate_msg_capacity(uint32_t entries, uint32_t flags) {
     /* Netlink message header */
     size += 16; /* MNL_NLMSG_HDRLEN */
     
-    /* tcmsg structure */
-    size += sizeof(struct tcmsg);
+    /* tcamsg structure */
+    size += sizeof(struct tcamsg);
     
     /* Action header (nested) */
     size += 4;
@@ -152,11 +68,11 @@ int build_gate_newaction(struct gb_nl_msg *msg,
                          const struct gate_shape *shape,
                          const struct gate_entry *entries,
                          uint32_t num_entries,
-                          uint32_t flags) {
-    /* flags parameter is used for TCA_GATE_FLAGS */
+                         uint16_t nlmsg_flags,
+                         uint32_t gate_flags) {
     struct nlmsghdr *nlh;
-    struct tcmsg *tcm;
-    struct nlattr *nest, *entry_list;
+    struct tcamsg *tca;
+    struct nlattr *nest_tab, *nest_prio, *nest_opts, *entry_list;
     uint32_t i;
     
     if (!msg || !msg->buf || !shape) {
@@ -170,31 +86,35 @@ int build_gate_newaction(struct gb_nl_msg *msg,
     /* Start netlink message */
     nlh = mnl_nlmsg_put_header(msg->buf);
     nlh->nlmsg_type = RTM_NEWACTION;
-    nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | NLM_F_CREATE | NLM_F_REPLACE;
+    nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | nlmsg_flags;
     nlh->nlmsg_seq = 0; /* Will be set by caller */
     
-    /* Add tcmsg */
-    tcm = mnl_nlmsg_put_extra_header(nlh, sizeof(*tcm));
-    memset(tcm, 0, sizeof(*tcm));
-    tcm->tcm_family = AF_UNSPEC;
-    tcm->tcm_ifindex = 0; /* No interface */
-    tcm->tcm_parent = TC_H_ROOT;
-    tcm->tcm_info = TC_H_MAKE(0, 0);
+    /* Add tcamsg */
+    tca = mnl_nlmsg_put_extra_header(nlh, sizeof(*tca));
+    memset(tca, 0, sizeof(*tca));
+    tca->tca_family = AF_UNSPEC;
     
-    /* Start nested attribute for action */
-    nest = mnl_attr_nest_start(nlh, TCA_ACT_MAX_PRIO);
+    /* Start nested attribute for actions table */
+    nest_tab = mnl_attr_nest_start(nlh, TCA_ACT_TAB);
+    
+    /* Start nested attribute for action at priority 1 */
+    nest_prio = mnl_attr_nest_start(nlh, GATEBENCH_ACT_PRIO);
     
     /* Add action kind */
     add_attr_str(nlh, TCA_ACT_KIND, "gate");
+
+    /* Add explicit index for act_api visibility */
+    add_attr_u32(nlh, TCA_ACT_INDEX, index);
     
     /* Start nested attribute for options */
-    nest = mnl_attr_nest_start(nlh, TCA_OPTIONS);
+    nest_opts = mnl_attr_nest_start(nlh, TCA_OPTIONS);
     
     /* Add gate parameters */
     struct tc_gate gate_params;
     memset(&gate_params, 0, sizeof(gate_params));
     gate_params.index = index;
     gate_params.action = TC_ACT_PIPE;
+    
     mnl_attr_put(nlh, TCA_GATE_PARMS, sizeof(gate_params), &gate_params);
     
     /* Add gate shape attributes */
@@ -204,8 +124,6 @@ int build_gate_newaction(struct gb_nl_msg *msg,
     
     /* Add optional attributes with defaults matching iproute2 */
     int32_t gate_prio = -1;      /* Default: wildcard */
-    uint32_t gate_flags = flags; /* Use passed flags parameter */
-    
     /* Only add priority if not default (following iproute2 pattern) */
     if (gate_prio != -1) {
         add_attr_s32(nlh, TCA_GATE_PRIORITY, gate_prio);
@@ -241,8 +159,9 @@ int build_gate_newaction(struct gb_nl_msg *msg,
     }
     
     /* End nested attributes */
-    mnl_attr_nest_end(nlh, nest); /* TCA_OPTIONS */
-    mnl_attr_nest_end(nlh, nest); /* TCA_ACT_MAX_PRIO */
+    mnl_attr_nest_end(nlh, nest_opts); /* TCA_OPTIONS */
+    mnl_attr_nest_end(nlh, nest_prio); /* Priority 1 */
+    mnl_attr_nest_end(nlh, nest_tab);  /* TCA_ACT_TAB */
     
     /* Update message length */
     msg->len = nlh->nlmsg_len;
@@ -252,7 +171,8 @@ int build_gate_newaction(struct gb_nl_msg *msg,
 
 int build_gate_delaction(struct gb_nl_msg *msg, uint32_t index) {
     struct nlmsghdr *nlh;
-    struct tcmsg *tcm;
+    struct tcamsg *tca;
+    struct nlattr *nest_tab, *nest_prio;
     
     if (!msg || !msg->buf) {
         return -EINVAL;
@@ -264,17 +184,26 @@ int build_gate_delaction(struct gb_nl_msg *msg, uint32_t index) {
     nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
     nlh->nlmsg_seq = 0; /* Will be set by caller */
     
-    /* Add tcmsg */
-    tcm = mnl_nlmsg_put_extra_header(nlh, sizeof(*tcm));
-    memset(tcm, 0, sizeof(*tcm));
-    tcm->tcm_family = AF_UNSPEC;
-    tcm->tcm_ifindex = 0; /* No interface */
-    tcm->tcm_parent = TC_H_ROOT;
-    tcm->tcm_info = TC_H_MAKE(0, 0);
+    /* Add tcamsg */
+    tca = mnl_nlmsg_put_extra_header(nlh, sizeof(*tca));
+    memset(tca, 0, sizeof(*tca));
+    tca->tca_family = AF_UNSPEC;
     
+    /* Start nested attribute for actions table */
+    nest_tab = mnl_attr_nest_start(nlh, TCA_ACT_TAB);
+    
+    /* Start nested attribute for action at priority 1 */
+    nest_prio = mnl_attr_nest_start(nlh, GATEBENCH_ACT_PRIO);
+    
+    /* Add action kind */
+    add_attr_str(nlh, TCA_ACT_KIND, "gate");
+
     /* Add index attribute */
     add_attr_u32(nlh, TCA_ACT_INDEX, index);
     
+    mnl_attr_nest_end(nlh, nest_prio);
+    mnl_attr_nest_end(nlh, nest_tab);
+
     /* Update message length */
     msg->len = nlh->nlmsg_len;
     

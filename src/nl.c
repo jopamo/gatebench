@@ -211,12 +211,11 @@ const char *gb_nl_strerror(int err) {
 }
 
 bool gb_nl_error_expected(int err, int expected) {
-    /* Both errors should be negative */
-    if (err >= 0 || expected >= 0) {
-        return false;
+    if (expected >= 0) {
+        return err == expected;
     }
     
-    return err == expected;
+    return err < 0 && err == expected;
 }
 
 /* Helper to get next sequence number */
