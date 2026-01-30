@@ -1,0 +1,7 @@
+# gatebench build options
+
+option('install_headers',
+  type: 'boolean',
+  description: 'Install development headers',
+  value: false
+)

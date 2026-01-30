@@ -1,0 +1,63 @@
+{
+  "version": "0.1.0",
+  "description": "Expected results format for gatebench tests",
+  "selftests": {
+    "expected_errors": {
+      "create_missing_entry_list": -22,
+      "create_empty_entry_list": -22,
+      "create_zero_interval": -22,
+      "create_bad_clockid": -22,
+      "replace_without_existing": -2,
+      "duplicate_create": -17
+    },
+    "error_names": {
+      "-2": "ENOENT",
+      "-17": "EEXIST",
+      "-22": "EINVAL"
+    }
+  },
+  "benchmark": {
+    "minimum_requirements": {
+      "ops_per_sec": 1000,
+      "max_latency_ms": 100,
+      "consistency": "p99 should be within 2x of p50"
+    },
+    "typical_results": {
+      "entries_1": {
+        "p50_ns": 15000,
+        "p95_ns": 25000,
+        "p99_ns": 35000,
+        "ops_per_sec": 50000
+      },
+      "entries_10": {
+        "p50_ns": 20000,
+        "p95_ns": 35000,
+        "p99_ns": 50000,
+        "ops_per_sec": 40000
+      },
+      "entries_100": {
+        "p50_ns": 50000,
+        "p95_ns": 100000,
+        "p99_ns": 150000,
+        "ops_per_sec": 15000
+      }
+    }
+  },
+  "regression_tests": [
+    {
+      "name": "latency_scaling",
+      "description": "Latency should scale sub-linearly with entries",
+      "check": "p50(entries=100) < 10 * p50(entries=1)"
+    },
+    {
+      "name": "throughput_degradation",
+      "description": "Throughput should not degrade catastrophically",
+      "check": "ops_per_sec(entries=100) > 0.1 * ops_per_sec(entries=1)"
+    },
+    {
+      "name": "tail_latency",
+      "description": "Tail latency should be reasonable",
+      "check": "p99_ns < 10 * p50_ns"
+    }
+  ]
+}
