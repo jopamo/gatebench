@@ -23,6 +23,9 @@ static const struct gb_selftest_case tests[] = {
     {"multiple entries", gb_selftest_multiple_entries, 0},
     {"malformed nesting", gb_selftest_malformed_nesting, -EINVAL},
     {"bad attribute size", gb_selftest_bad_attribute_size, -EINVAL},
+    {"param validation", gb_selftest_param_validation, 0},
+    {"replace invalid", gb_selftest_replace_invalid, 0},
+    {"large dump", gb_selftest_large_dump, 0},
 };
 
 #define NUM_TESTS (sizeof(tests) / sizeof(tests[0]))
