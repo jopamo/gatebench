@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <time.h>
 
 struct selftest {
     const char *name;
@@ -51,7 +52,7 @@ static int test_create_missing_parms(struct gb_nl_sock *sock, uint32_t base_inde
     /* SKIP TCA_GATE_PARMS */
     
     /* Add other attributes to be a "valid" request otherwise */
-    mnl_attr_put_u32(nlh, TCA_GATE_CLOCKID, 3); /* CLOCK_TAI */
+    mnl_attr_put_u32(nlh, TCA_GATE_CLOCKID, CLOCK_TAI);
     mnl_attr_put_u64(nlh, TCA_GATE_BASE_TIME, 0);
     mnl_attr_put_u64(nlh, TCA_GATE_CYCLE_TIME, 1000000);
     
@@ -80,7 +81,7 @@ static int test_create_missing_entries(struct gb_nl_sock *sock, uint32_t base_in
     int ret;
     
     /* Create message without TCA_GATE_ENTRY_LIST */
-    shape.clockid = 3; /* CLOCK_TAI */
+    shape.clockid = CLOCK_TAI;
     shape.base_time = 0;
     shape.cycle_time = 1000000; /* 1ms */
     shape.interval_ns = 1000000;
@@ -145,7 +146,7 @@ static int test_create_empty_entries(struct gb_nl_sock *sock, uint32_t base_inde
     int ret;
     
     /* Create message with empty entry list */
-    shape.clockid = 3; /* CLOCK_TAI */
+    shape.clockid = CLOCK_TAI;
     shape.base_time = 0;
     shape.cycle_time = 1000000;
     shape.interval_ns = 1000000;
@@ -209,7 +210,7 @@ static int test_create_zero_interval(struct gb_nl_sock *sock, uint32_t base_inde
     int ret;
     
     /* Create message with zero interval */
-    shape.clockid = 3; /* CLOCK_TAI */
+    shape.clockid = CLOCK_TAI;
     shape.base_time = 0;
     shape.cycle_time = 1000000;
     shape.interval_ns = 0; /* Zero interval */
@@ -311,7 +312,7 @@ static int test_replace_without_existing(struct gb_nl_sock *sock, uint32_t base_
     gb_nl_send_recv(sock, msg, resp, 1000);
     
     /* Now try to replace non-existing gate */
-    shape.clockid = 3;
+    shape.clockid = CLOCK_TAI;
     shape.base_time = 0;
     shape.cycle_time = 1000000;
     shape.interval_ns = 1000000;
@@ -333,7 +334,7 @@ static int test_replace_without_existing(struct gb_nl_sock *sock, uint32_t base_
     }
     
     ret = build_gate_newaction(msg, base_index, &shape, &entry, 1,
-                               NLM_F_REPLACE, 0);
+                               NLM_F_CREATE | NLM_F_REPLACE, 0);
     if (ret < 0) {
         goto out;
     }
@@ -363,8 +364,9 @@ static int test_duplicate_create(struct gb_nl_sock *sock, uint32_t base_index) {
     struct gate_entry entry;
     size_t cap;
     int ret;
+    int test_ret = 0;
     
-    shape.clockid = 3;
+    shape.clockid = CLOCK_TAI;
     shape.base_time = 0;
     shape.cycle_time = 1000000;
     shape.interval_ns = 1000000;
@@ -380,7 +382,7 @@ static int test_duplicate_create(struct gb_nl_sock *sock, uint32_t base_index) {
     resp = gb_nl_msg_alloc((size_t)MNL_SOCKET_BUFFER_SIZE);
     
     if (!msg || !resp) {
-        ret = -ENOMEM;
+        test_ret = -ENOMEM;
         goto out;
     }
     
@@ -388,11 +390,13 @@ static int test_duplicate_create(struct gb_nl_sock *sock, uint32_t base_index) {
     ret = build_gate_newaction(msg, base_index, &shape, &entry, 1,
                                NLM_F_CREATE | NLM_F_EXCL, 0);
     if (ret < 0) {
+        test_ret = ret;
         goto out;
     }
     
     ret = gb_nl_send_recv(sock, msg, resp, 1000);
     if (ret < 0 && ret != -EEXIST) {
+        test_ret = ret;
         goto cleanup;
     }
     
@@ -401,10 +405,11 @@ static int test_duplicate_create(struct gb_nl_sock *sock, uint32_t base_index) {
     ret = build_gate_newaction(msg, base_index, &shape, &entry, 1,
                                NLM_F_CREATE | NLM_F_EXCL, 0);
     if (ret < 0) {
+        test_ret = ret;
         goto cleanup;
     }
     
-    ret = gb_nl_send_recv(sock, msg, resp, 1000);
+    test_ret = gb_nl_send_recv(sock, msg, resp, 1000);
     
 cleanup:
     /* Clean up */
@@ -417,7 +422,7 @@ cleanup:
 out:
     if (msg) gb_nl_msg_free(msg);
     if (resp) gb_nl_msg_free(resp);
-    return ret;
+    return test_ret;
 }
 
 static const struct selftest tests[] = {

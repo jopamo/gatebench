@@ -7,6 +7,7 @@
 #include <errno.h>
 #include <stdint.h>
 #include <limits.h>
+#include <time.h>
 
 #define DEFAULT_ITERS       1000
 #define DEFAULT_WARMUP      100
@@ -16,7 +17,7 @@
 #define DEFAULT_INDEX       1000
 #define DEFAULT_CPU         -1       /* No pinning */
 #define DEFAULT_TIMEOUT_MS  1000
-#define DEFAULT_CLOCKID     3        /* CLOCK_TAI */
+#define DEFAULT_CLOCKID     CLOCK_TAI
 #define DEFAULT_BASE_TIME   0
 #define DEFAULT_CYCLE_TIME  0
 
@@ -40,7 +41,7 @@ static const char *usage_str =
 "  -t, --timeout-ms=MS     Netlink timeout in milliseconds (default: 1000)\n"
 "\n"
 "Gate shape options:\n"
-"  --clockid=ID            Clock ID (3=CLOCK_TAI, default: 3)\n"
+"  --clockid=ID            Clock ID (default: CLOCK_TAI)\n"
 "  --base-time=NS          Base time for gate schedule (default: 0)\n"
 "  --cycle-time=NS         Cycle time for gate schedule (default: 0)\n"
 "\n"
