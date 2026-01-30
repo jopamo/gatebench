@@ -1,4 +1,4 @@
-build/
+build*/
 *.o
 *.a
 gatebench
@@ -6,3 +6,4 @@ compile_commands.json
 .vscode/
 *~
 *.swp
+TODO.md
