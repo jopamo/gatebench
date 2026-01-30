@@ -36,6 +36,15 @@ void gb_nl_msg_free(struct gb_nl_msg *msg);
 /* Reset message buffer (keep capacity, set len to 0) */
 void gb_nl_msg_reset(struct gb_nl_msg *msg);
 
+/* Forward declaration */
+struct gate_dump;
+
+/* Get gate action by index */
+int gb_nl_get_action(struct gb_nl_sock *sock,
+                     uint32_t index,
+                     struct gate_dump *dump,
+                     int timeout_ms);
+
 /* Get error string from netlink error */
 const char *gb_nl_strerror(int err);
 

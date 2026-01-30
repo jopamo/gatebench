@@ -81,14 +81,14 @@ static int benchmark_single_run(struct gb_nl_sock *sock,
     /* Build messages */
     ret = build_gate_newaction(create_msg, cfg->index, &shape,
                                entries, cfg->entries,
-                               NLM_F_CREATE | NLM_F_EXCL, 0);
+                               NLM_F_CREATE | NLM_F_EXCL, 0, -1);
     if (ret < 0) {
         goto out;
     }
     
     ret = build_gate_newaction(replace_msg, cfg->index, &shape,
                                entries, cfg->entries,
-                               NLM_F_CREATE | NLM_F_REPLACE, 0);
+                               NLM_F_CREATE | NLM_F_REPLACE, 0, -1);
     if (ret < 0) {
         goto out;
     }

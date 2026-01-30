@@ -50,6 +50,19 @@ struct gate_entry {
     int32_t maxoctets;  /* Maximum octets (-1 for unlimited) */
 };
 
+/* Gate dump structure */
+struct gate_dump {
+    uint32_t index;
+    uint32_t clockid;
+    uint64_t base_time;
+    uint64_t cycle_time;
+    uint64_t cycle_time_ext;
+    uint32_t flags;
+    int32_t priority;
+    struct gate_entry *entries;
+    uint32_t num_entries;
+};
+
 /* Calculate message capacity needed for gate action */
 size_t gate_msg_capacity(uint32_t entries, uint32_t flags);
 
@@ -60,13 +73,23 @@ int build_gate_newaction(struct gb_nl_msg *msg,
                          const struct gate_entry *entries,
                          uint32_t num_entries,
                          uint16_t nlmsg_flags,
-                         uint32_t gate_flags);
+                         uint32_t gate_flags,
+                         int32_t priority);
 
 /* Build RTM_DELACTION message */
 int build_gate_delaction(struct gb_nl_msg *msg, uint32_t index);
 
+/* Build RTM_GETACTION message */
+int build_gate_getaction(struct gb_nl_msg *msg, uint32_t index);
+
 /* Add a gate entry to message */
 int add_gate_entry(struct gb_nl_msg *msg,
                    const struct gate_entry *entry);
+
+/* Free gate dump structure */
+void gb_gate_dump_free(struct gate_dump *dump);
+
+/* Parse gate action from netlink message */
+int gb_nl_gate_parse(const struct nlmsghdr *nlh, struct gate_dump *dump);
 
 #endif /* GATEBENCH_GATE_H */
