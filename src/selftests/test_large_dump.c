@@ -11,6 +11,7 @@ int gb_selftest_large_dump(struct gb_nl_sock* sock, uint32_t base_index) {
     struct gate_entry* entries;
     struct gate_dump dump;
     const uint32_t num_entries = 100; /* Significant but should fit in typical netlink msg */
+    uint64_t cycle_time = 0;
     int ret;
     int test_ret = 0;
 
@@ -23,7 +24,9 @@ int gb_selftest_large_dump(struct gb_nl_sock* sock, uint32_t base_index) {
         gb_selftest_entry_default(&entries[i]);
         entries[i].interval = 100000 + i;
         entries[i].gate_state = (i % 2) == 0;
+        cycle_time += entries[i].interval;
     }
+    shape.cycle_time = cycle_time;
 
     ret = gb_selftest_alloc_msgs(&msg, &resp, gate_msg_capacity(num_entries, 0));
     if (ret < 0) {
