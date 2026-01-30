@@ -19,10 +19,10 @@ int gb_util_get_cpu(void);
 void gb_util_sleep_ns(uint64_t ns);
 
 /* String parsing utilities */
-int gb_util_parse_uint64(const char *str, uint64_t *val);
-int gb_util_parse_uint32(const char *str, uint32_t *val);
+int gb_util_parse_uint64(const char* str, uint64_t* val);
+int gb_util_parse_uint32(const char* str, uint32_t* val);
 
 /* Clock ID to string */
-const char *gb_util_clockid_name(int clockid);
+const char* gb_util_clockid_name(int clockid);
 
 #endif /* GATEBENCH_UTIL_H */

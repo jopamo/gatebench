@@ -14,35 +14,34 @@
 #include <sched.h>
 
 /* Forward declarations for functions that will be implemented in other files */
-extern int gb_bench_run(const struct gb_config *cfg, struct gb_summary *summary);
-
+extern int gb_bench_run(const struct gb_config* cfg, struct gb_summary* summary);
 
 static void print_environment(void) {
     struct utsname uts;
     int cpu;
-    
+
     if (uname(&uts) == 0) {
         printf("Environment:\n");
         printf("  Kernel: %s %s %s\n", uts.sysname, uts.release, uts.machine);
     }
-    
+
     /* Try to get current CPU */
     cpu = sched_getcpu();
     if (cpu >= 0) {
         printf("  Current CPU: %d\n", cpu);
     }
-    
+
     printf("  Clock source: CLOCK_MONOTONIC_RAW\n");
     printf("\n");
 }
 
-static void print_json_header(const struct gb_config *cfg) {
+static void print_json_header(const struct gb_config* cfg) {
     struct utsname uts;
     int cpu;
-    
+
     printf("{\n");
     printf("  \"version\": \"0.1.0\",\n");
-    
+
     if (uname(&uts) == 0) {
         printf("  \"environment\": {\n");
         printf("    \"sysname\": \"%s\",\n", uts.sysname);
@@ -50,10 +49,10 @@ static void print_json_header(const struct gb_config *cfg) {
         printf("    \"machine\": \"%s\"\n", uts.machine);
         printf("  },\n");
     }
-    
+
     cpu = sched_getcpu();
     printf("  \"current_cpu\": %d,\n", cpu);
-    
+
     printf("  \"config\": {\n");
     printf("    \"iters\": %u,\n", cfg->iters);
     printf("    \"warmup\": %u,\n", cfg->warmup);
@@ -76,33 +75,34 @@ static void print_json_footer(void) {
     printf("}\n");
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
     struct gb_config cfg;
-    struct gb_nl_sock *sock = NULL;
+    struct gb_nl_sock* sock = NULL;
     struct gb_summary summary;
     int ret = 0;
-    
+
     /* Parse command line arguments */
     ret = gb_cli_parse(argc, argv, &cfg);
     if (ret < 0) {
         return EXIT_FAILURE;
     }
-    
+
     /* Print configuration */
     if (!cfg.json) {
         gb_config_print(&cfg);
         print_environment();
-    } else {
+    }
+    else {
         print_json_header(&cfg);
     }
-    
+
     /* Open netlink socket */
     ret = gb_nl_open(&sock);
     if (ret < 0) {
         fprintf(stderr, "Failed to open netlink socket: %s\n", strerror(-ret));
         return EXIT_FAILURE;
     }
-    
+
     /* Pin CPU if requested */
     if (cfg.cpu >= 0) {
         ret = gb_util_pin_cpu(cfg.cpu);
@@ -115,30 +115,30 @@ int main(int argc, char *argv[]) {
             printf("Pinned to CPU %d\n\n", cfg.cpu);
         }
     }
-    
+
     /* Run selftests if requested */
     if (cfg.selftest) {
         if (!cfg.json) {
             printf("Running selftests...\n");
         }
-        
+
         ret = gb_selftest_run(&cfg);
         if (ret < 0) {
             fprintf(stderr, "Selftests failed\n");
             gb_nl_close(sock);
             return EXIT_FAILURE;
         }
-        
+
         if (!cfg.json) {
             printf("Selftests passed\n\n");
         }
     }
-    
+
     /* Run benchmark */
     if (!cfg.json) {
         printf("Running benchmark...\n");
     }
-    
+
     memset(&summary, 0, sizeof(summary));
     ret = gb_bench_run(&cfg, &summary);
     if (ret < 0) {
@@ -147,32 +147,33 @@ int main(int argc, char *argv[]) {
         gb_summary_free(&summary);
         return EXIT_FAILURE;
     }
-    
+
     /* Print results */
     if (!cfg.json) {
         /* TODO: Implement human-readable output */
         printf("Benchmark completed successfully\n");
-    } else {
+    }
+    else {
         /* TODO: Implement JSON output */
         print_json_footer();
     }
-    
+
     /* Cleanup */
     gb_summary_free(&summary);
     gb_nl_close(sock);
-    
+
     return EXIT_SUCCESS;
 }
 
 /* Implement stub functions that will be replaced by actual implementations */
-void gb_run_result_free(struct gb_run_result *result) {
+void gb_run_result_free(struct gb_run_result* result) {
     if (result && result->samples) {
         free(result->samples);
         result->samples = NULL;
     }
 }
 
-void gb_summary_free(struct gb_summary *summary) {
+void gb_summary_free(struct gb_summary* summary) {
     if (summary) {
         if (summary->runs) {
             for (uint32_t i = 0; i < summary->run_count; i++) {
