@@ -26,17 +26,29 @@ struct gb_config {
     uint32_t sample_every; /* Sampling interval */
 
     /* Gate shape parameters */
-    uint32_t clockid;    /* Clock ID (CLOCK_TAI, CLOCK_MONOTONIC, etc.) */
-    uint64_t base_time;  /* Base time for gate schedule */
+
+    uint32_t clockid; /* Clock ID (CLOCK_TAI, CLOCK_MONOTONIC, etc.) */
+
+    uint64_t base_time; /* Base time for gate schedule */
+
     uint64_t cycle_time; /* Cycle time for gate schedule */
+
+    uint64_t cycle_time_ext; /* Cycle time extension */
 };
 
 /* Gate shape structure */
+
 struct gate_shape {
     uint32_t clockid;
+
     uint64_t base_time;
+
     uint64_t cycle_time;
+
+    uint64_t cycle_time_ext;
+
     uint64_t interval_ns;
+
     uint32_t entries;
 };
 
