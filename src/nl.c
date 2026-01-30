@@ -1,7 +1,9 @@
 #include "../include/gatebench_nl.h"
+#include "../include/gatebench_gate.h"
 #include <libmnl/libmnl.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
+#include <linux/pkt_cls.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -199,6 +201,40 @@ int gb_nl_send_recv(struct gb_nl_sock *sock,
     
     /* Receive response */
     return recv_response(sock, resp, seq, timeout_ms);
+}
+
+int gb_nl_get_action(struct gb_nl_sock *sock,
+                     uint32_t index,
+                     struct gate_dump *dump,
+                     int timeout_ms) {
+    struct gb_nl_msg *req = NULL;
+    struct gb_nl_msg *resp = NULL;
+    int ret;
+    
+    req = gb_nl_msg_alloc(1024);
+    resp = gb_nl_msg_alloc((size_t)MNL_SOCKET_BUFFER_SIZE);
+    
+    if (!req || !resp) {
+        ret = -ENOMEM;
+        goto out;
+    }
+    
+    ret = build_gate_getaction(req, index);
+    if (ret < 0) {
+        goto out;
+    }
+    
+    ret = gb_nl_send_recv(sock, req, resp, timeout_ms);
+    if (ret < 0) {
+        goto out;
+    }
+    
+    ret = gb_nl_gate_parse((struct nlmsghdr *)resp->buf, dump);
+    
+out:
+    if (req) gb_nl_msg_free(req);
+    if (resp) gb_nl_msg_free(resp);
+    return ret;
 }
 
 const char *gb_nl_strerror(int err) {

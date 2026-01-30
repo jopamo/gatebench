@@ -231,7 +231,7 @@ static int test_create_zero_interval(struct gb_nl_sock *sock, uint32_t base_inde
     }
     
     ret = build_gate_newaction(msg, base_index, &shape, &entry, 1,
-                               NLM_F_CREATE | NLM_F_EXCL, 0);
+                               NLM_F_CREATE | NLM_F_EXCL, 0, -1);
     if (ret < 0) {
         goto out;
     }
@@ -273,7 +273,7 @@ static int test_create_bad_clockid(struct gb_nl_sock *sock, uint32_t base_index)
     }
     
     ret = build_gate_newaction(msg, base_index, &shape, &entry, 1,
-                               NLM_F_CREATE | NLM_F_EXCL, 0);
+                               NLM_F_CREATE | NLM_F_EXCL, 0, -1);
     if (ret < 0) {
         goto out;
     }
@@ -334,7 +334,7 @@ static int test_replace_without_existing(struct gb_nl_sock *sock, uint32_t base_
     }
     
     ret = build_gate_newaction(msg, base_index, &shape, &entry, 1,
-                               NLM_F_CREATE | NLM_F_REPLACE, 0);
+                               NLM_F_CREATE | NLM_F_REPLACE, 0, -1);
     if (ret < 0) {
         goto out;
     }
@@ -388,7 +388,7 @@ static int test_duplicate_create(struct gb_nl_sock *sock, uint32_t base_index) {
     
     /* First create */
     ret = build_gate_newaction(msg, base_index, &shape, &entry, 1,
-                               NLM_F_CREATE | NLM_F_EXCL, 0);
+                               NLM_F_CREATE | NLM_F_EXCL, 0, -1);
     if (ret < 0) {
         test_ret = ret;
         goto out;
@@ -403,7 +403,7 @@ static int test_duplicate_create(struct gb_nl_sock *sock, uint32_t base_index) {
     /* Try to create again - should fail with -EEXIST */
     gb_nl_msg_reset(msg);
     ret = build_gate_newaction(msg, base_index, &shape, &entry, 1,
-                               NLM_F_CREATE | NLM_F_EXCL, 0);
+                               NLM_F_CREATE | NLM_F_EXCL, 0, -1);
     if (ret < 0) {
         test_ret = ret;
         goto cleanup;
@@ -425,6 +425,174 @@ out:
     return test_ret;
 }
 
+static int test_dump_correctness(struct gb_nl_sock *sock, uint32_t base_index) {
+    struct gb_nl_msg *msg = NULL;
+    struct gb_nl_msg *resp = NULL;
+    struct gate_shape shape;
+    struct gate_entry entry;
+    struct gate_dump dump;
+    int ret;
+    int test_ret = 0;
+    
+    shape.clockid = CLOCK_TAI;
+    shape.base_time = 12345678;
+    shape.cycle_time = 1000000;
+    shape.interval_ns = 1000000;
+    shape.entries = 1;
+    
+    entry.gate_state = true;
+    entry.interval = 1000000;
+    entry.ipv = 4;
+    entry.maxoctets = 1024;
+    
+    msg = gb_nl_msg_alloc(gate_msg_capacity(1, 0));
+    resp = gb_nl_msg_alloc((size_t)MNL_SOCKET_BUFFER_SIZE);
+    
+    if (!msg || !resp) {
+        test_ret = -ENOMEM;
+        goto out;
+    }
+    
+    /* Create gate */
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1,
+                               NLM_F_CREATE | NLM_F_EXCL, 0, -1);
+    if (ret < 0) {
+        test_ret = ret;
+        goto out;
+    }
+    
+    ret = gb_nl_send_recv(sock, msg, resp, 1000);
+    if (ret < 0) {
+        test_ret = ret;
+        goto out;
+    }
+    
+    /* Dump and verify */
+    ret = gb_nl_get_action(sock, base_index, &dump, 1000);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+    
+    if (dump.index != base_index ||
+        dump.clockid != shape.clockid ||
+        dump.base_time != shape.base_time ||
+        dump.cycle_time != shape.cycle_time ||
+        dump.num_entries != 1 ||
+        dump.entries[0].gate_state != entry.gate_state ||
+        dump.entries[0].interval != entry.interval ||
+        dump.entries[0].ipv != entry.ipv ||
+        dump.entries[0].maxoctets != entry.maxoctets) {
+        test_ret = -EINVAL;
+    }
+    
+    gb_gate_dump_free(&dump);
+    
+cleanup:
+    gb_nl_msg_reset(msg);
+    build_gate_delaction(msg, base_index);
+    gb_nl_send_recv(sock, msg, resp, 1000);
+    
+out:
+    if (msg) gb_nl_msg_free(msg);
+    if (resp) gb_nl_msg_free(resp);
+    return test_ret;
+}
+
+static int test_replace_persistence(struct gb_nl_sock *sock, uint32_t base_index) {
+    struct gb_nl_msg *msg = NULL;
+    struct gb_nl_msg *resp = NULL;
+    struct gate_shape shape;
+    struct gate_entry entry;
+    struct gate_dump dump;
+    int ret;
+    int test_ret = 0;
+    
+    shape.clockid = CLOCK_TAI;
+    shape.base_time = 0;
+    shape.cycle_time = 1000000;
+    shape.interval_ns = 1000000;
+    shape.entries = 1;
+    
+    entry.gate_state = true;
+    entry.interval = 1000000;
+    entry.ipv = -1;
+    entry.maxoctets = -1;
+    
+    msg = gb_nl_msg_alloc(gate_msg_capacity(1, 0));
+    resp = gb_nl_msg_alloc((size_t)MNL_SOCKET_BUFFER_SIZE);
+    
+    if (!msg || !resp) {
+        test_ret = -ENOMEM;
+        goto out;
+    }
+    
+    /* 1. Create gate with flags=1, priority=10 */
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1,
+                               NLM_F_CREATE | NLM_F_EXCL, 1, 10);
+    if (ret < 0) {
+        test_ret = ret;
+        goto out;
+    }
+    
+    ret = gb_nl_send_recv(sock, msg, resp, 1000);
+    if (ret < 0) {
+        test_ret = ret;
+        goto out;
+    }
+    
+    /* Verify initial values */
+    ret = gb_nl_get_action(sock, base_index, &dump, 1000);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+    if (dump.flags != 1 || dump.priority != 10) {
+        test_ret = -EINVAL;
+        gb_gate_dump_free(&dump);
+        goto cleanup;
+    }
+    gb_gate_dump_free(&dump);
+    
+    /* 2. Replace gate with flags=2, priority=20 */
+    gb_nl_msg_reset(msg);
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1,
+                               NLM_F_CREATE | NLM_F_REPLACE, 2, 20);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+    
+    ret = gb_nl_send_recv(sock, msg, resp, 1000);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+    
+    /* Verify updated values */
+    ret = gb_nl_get_action(sock, base_index, &dump, 1000);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+    if (dump.flags != 2 || dump.priority != 20) {
+        test_ret = -EINVAL;
+        gb_gate_dump_free(&dump);
+        goto cleanup;
+    }
+    gb_gate_dump_free(&dump);
+    
+cleanup:
+    gb_nl_msg_reset(msg);
+    build_gate_delaction(msg, base_index);
+    gb_nl_send_recv(sock, msg, resp, 1000);
+    
+out:
+    if (msg) gb_nl_msg_free(msg);
+    if (resp) gb_nl_msg_free(resp);
+    return test_ret;
+}
+
 static const struct selftest tests[] = {
     {"create missing parms", test_create_missing_parms, -EINVAL},
     {"create missing entry list", test_create_missing_entries, -EINVAL},
@@ -433,6 +601,8 @@ static const struct selftest tests[] = {
     {"create bad clockid", test_create_bad_clockid, -EINVAL},
     {"replace without existing", test_replace_without_existing, 0},
     {"duplicate create", test_duplicate_create, -EEXIST},
+    {"dump correctness", test_dump_correctness, 0},
+    {"replace persistence", test_replace_persistence, 0},
 };
 
 #define NUM_TESTS (sizeof(tests) / sizeof(tests[0]))
