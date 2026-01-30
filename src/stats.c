@@ -92,8 +92,10 @@ uint64_t gb_stats_percentile(struct gb_stats* stats, double p) {
 
     {
         const double idx = p * (double)(stats->count - 1);
-        const size_t lo = (size_t)floor(idx);
-        const size_t hi = (size_t)ceil(idx);
+        const double floor_idx = floor(idx);
+        const double ceil_idx = ceil(idx);
+        const size_t lo = (size_t)floor_idx;
+        const size_t hi = (size_t)ceil_idx;
 
         if (lo == hi)
             return stats->values[lo];
