@@ -682,6 +682,147 @@ out:
     return test_ret;
 }
 
+static int test_cycle_time_derivation(struct gb_nl_sock* sock, uint32_t base_index) {
+    struct gb_nl_msg* msg = NULL;
+    struct gb_nl_msg* resp = NULL;
+    struct gate_shape shape;
+    struct gate_entry entries[2];
+    struct gate_dump dump;
+    int ret;
+    int test_ret = 0;
+
+    shape.clockid = CLOCK_TAI;
+    shape.base_time = 0;
+    shape.cycle_time = 0; /* Request derivation */
+    shape.entries = 2;
+
+    entries[0].gate_state = true;
+    entries[0].interval = 500000; /* 0.5ms */
+    entries[0].ipv = -1;
+    entries[0].maxoctets = -1;
+
+    entries[1].gate_state = false;
+    entries[1].interval = 1500000; /* 1.5ms */
+    entries[1].ipv = -1;
+    entries[1].maxoctets = -1;
+
+    msg = gb_nl_msg_alloc(gate_msg_capacity(2, 0));
+    resp = gb_nl_msg_alloc((size_t)MNL_SOCKET_BUFFER_SIZE);
+
+    if (!msg || !resp) {
+        test_ret = -ENOMEM;
+        goto out;
+    }
+
+    /* Create gate with cycle_time=0 */
+    ret = build_gate_newaction(msg, base_index, &shape, entries, 2, NLM_F_CREATE | NLM_F_EXCL, 0, -1);
+    if (ret < 0) {
+        test_ret = ret;
+        goto out;
+    }
+
+    ret = gb_nl_send_recv(sock, msg, resp, 1000);
+    if (ret < 0) {
+        test_ret = ret;
+        goto out;
+    }
+
+    /* Verify derived cycle_time (should be 500000 + 1500000 = 2000000) */
+    ret = gb_nl_get_action(sock, base_index, &dump, 1000);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    if (dump.cycle_time != 2000000) {
+        printf("Cycle time derivation failed: expected 2000000, got %lu\n", dump.cycle_time);
+        test_ret = -EINVAL;
+    }
+
+    gb_gate_dump_free(&dump);
+
+cleanup:
+    gb_nl_msg_reset(msg);
+    build_gate_delaction(msg, base_index);
+    gb_nl_send_recv(sock, msg, resp, 1000);
+
+out:
+    if (msg)
+        gb_nl_msg_free(msg);
+    if (resp)
+        gb_nl_msg_free(resp);
+    return test_ret;
+}
+
+static int test_cycle_time_ext_parsing(struct gb_nl_sock* sock, uint32_t base_index) {
+    struct gb_nl_msg* msg = NULL;
+    struct gb_nl_msg* resp = NULL;
+    struct gate_shape shape;
+    struct gate_entry entry;
+    struct gate_dump dump;
+    int ret;
+    int test_ret = 0;
+
+    shape.clockid = CLOCK_TAI;
+    shape.base_time = 0;
+    shape.cycle_time = 1000000;
+    shape.cycle_time_ext = 500000; /* 0.5ms extension */
+    shape.entries = 1;
+
+    entry.gate_state = true;
+    entry.interval = 1000000;
+    entry.ipv = -1;
+    entry.maxoctets = -1;
+
+    msg = gb_nl_msg_alloc(gate_msg_capacity(1, 0));
+    resp = gb_nl_msg_alloc((size_t)MNL_SOCKET_BUFFER_SIZE);
+
+    if (!msg || !resp) {
+        test_ret = -ENOMEM;
+        goto out;
+    }
+
+    /* Create gate with cycle_time_ext */
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, NLM_F_CREATE | NLM_F_EXCL, 0, -1);
+    if (ret < 0) {
+        test_ret = ret;
+        goto out;
+    }
+
+    ret = gb_nl_send_recv(sock, msg, resp, 1000);
+    if (ret < 0) {
+        test_ret = ret;
+        goto out;
+    }
+
+    /* Verify dump */
+    ret = gb_nl_get_action(sock, base_index, &dump, 1000);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    if (dump.cycle_time_ext != shape.cycle_time_ext) {
+        printf("Cycle time extension parsing failed: expected %lu, got %lu\n", shape.cycle_time_ext,
+               dump.cycle_time_ext);
+        test_ret = -EINVAL;
+    }
+
+    gb_gate_dump_free(&dump);
+
+cleanup:
+    gb_nl_msg_reset(msg);
+    build_gate_delaction(msg, base_index);
+    gb_nl_send_recv(sock, msg, resp, 1000);
+
+out:
+    if (msg)
+        gb_nl_msg_free(msg);
+    if (resp)
+        gb_nl_msg_free(resp);
+    return test_ret;
+}
+
 static const struct selftest tests[] = {
     {"create missing parms", test_create_missing_parms, -EINVAL},
     {"create missing entry list", test_create_missing_entries, -EINVAL},
@@ -693,8 +834,9 @@ static const struct selftest tests[] = {
     {"dump correctness", test_dump_correctness, 0},
     {"replace persistence", test_replace_persistence, 0},
     {"clockid variants", test_clockid_variants, 0},
+    {"cycle time derivation", test_cycle_time_derivation, 0},
+    {"cycle time extension parsing", test_cycle_time_ext_parsing, 0},
 };
-
 #define NUM_TESTS (sizeof(tests) / sizeof(tests[0]))
 
 int gb_selftest_run(const struct gb_config* cfg) {

@@ -44,6 +44,7 @@ static const char* usage_str =
     "  --clockid=ID            Clock ID (default: CLOCK_TAI)\n"
     "  --base-time=NS          Base time for gate schedule (default: 0)\n"
     "  --cycle-time=NS         Cycle time for gate schedule (default: 0)\n"
+    "  --cycle-time-ext=NS     Cycle time extension (default: 0)\n"
     "\n"
     "Mode options:\n"
     "  -s, --selftest          Run selftests before benchmark (default: off)\n"
@@ -65,6 +66,7 @@ static const struct option long_options[] = {{"entries", required_argument, 0, '
                                              {"clockid", required_argument, 0, 256},
                                              {"base-time", required_argument, 0, 257},
                                              {"cycle-time", required_argument, 0, 258},
+                                             {"cycle-time-ext", required_argument, 0, 260},
                                              {"selftest", no_argument, 0, 's'},
                                              {"json", no_argument, 0, 'j'},
                                              {"sample-every", required_argument, 0, 259},
@@ -137,6 +139,7 @@ void gb_config_init(struct gb_config* cfg) {
     cfg->clockid = DEFAULT_CLOCKID;
     cfg->base_time = DEFAULT_BASE_TIME;
     cfg->cycle_time = DEFAULT_CYCLE_TIME;
+    cfg->cycle_time_ext = 0;
 }
 
 void gb_config_print(const struct gb_config* cfg) {
@@ -161,6 +164,7 @@ void gb_config_print(const struct gb_config* cfg) {
     printf("  Clock ID:           %u\n", cfg->clockid);
     printf("  Base time:          %lu ns\n", cfg->base_time);
     printf("  Cycle time:         %lu ns\n", cfg->cycle_time);
+    printf("  Cycle time ext:     %lu ns\n", cfg->cycle_time_ext);
     printf("\n");
 }
 
@@ -228,6 +232,11 @@ int gb_cli_parse(int argc, char* argv[], struct gb_config* cfg) {
 
             case 258: /* cycle-time */
                 if (parse_uint64(optarg, &cfg->cycle_time, "cycle-time") < 0)
+                    return -EINVAL;
+                break;
+
+            case 260: /* cycle-time-ext */
+                if (parse_uint64(optarg, &cfg->cycle_time_ext, "cycle-time-ext") < 0)
                     return -EINVAL;
                 break;
 

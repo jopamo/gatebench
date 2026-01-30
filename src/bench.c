@@ -42,6 +42,7 @@ static int benchmark_single_run(struct gb_nl_sock* sock, const struct gb_config*
     shape.clockid = cfg->clockid;
     shape.base_time = cfg->base_time;
     shape.cycle_time = cfg->cycle_time;
+    shape.cycle_time_ext = cfg->cycle_time_ext;
     shape.interval_ns = cfg->interval_ns;
     shape.entries = cfg->entries;
 

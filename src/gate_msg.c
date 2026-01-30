@@ -30,6 +30,7 @@ size_t gate_msg_capacity(uint32_t entries, uint32_t flags) {
     size += 4 + sizeof(uint32_t); /* clockid */
     size += 4 + sizeof(uint64_t); /* base_time */
     size += 4 + sizeof(uint64_t); /* cycle_time */
+    size += 4 + sizeof(uint64_t); /* cycle_time_ext */
 
     /* Entry list (nested) */
     size += 4;
@@ -129,6 +130,10 @@ int build_gate_newaction(struct gb_nl_msg* msg,
     add_attr_u32(nlh, TCA_GATE_CLOCKID, shape->clockid);
     add_attr_u64(nlh, TCA_GATE_BASE_TIME, shape->base_time);
     add_attr_u64(nlh, TCA_GATE_CYCLE_TIME, shape->cycle_time);
+
+    if (shape->cycle_time_ext != 0) {
+        add_attr_u64(nlh, TCA_GATE_CYCLE_TIME_EXT, shape->cycle_time_ext);
+    }
 
     /* Only add priority if not default (following iproute2 pattern) */
     if (priority != -1) {
