@@ -18,7 +18,7 @@ struct gb_nl_msg {
 /* Initialize netlink socket */
 int gb_nl_open(struct gb_nl_sock** sock);
 
-/* Close netlink socket */
+/* Close and free netlink socket */
 void gb_nl_close(struct gb_nl_sock* sock);
 
 /* Send and receive netlink message with error checking */
