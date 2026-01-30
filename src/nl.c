@@ -56,10 +56,16 @@ int gb_nl_open(struct gb_nl_sock** sock) {
 }
 
 void gb_nl_close(struct gb_nl_sock* sock) {
-    if (sock && sock->nl) {
+    if (!sock) {
+        return;
+    }
+
+    if (sock->nl) {
         mnl_socket_close(sock->nl);
         sock->nl = NULL;
     }
+
+    free(sock);
 }
 
 struct gb_nl_msg* gb_nl_msg_alloc(size_t capacity) {
