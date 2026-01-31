@@ -47,7 +47,6 @@ static const char* usage_str =
     "  --cycle-time-ext=NS     Cycle time extension (default: 0)\n"
     "\n"
     "Mode options:\n"
-    "  -s, --selftest          Run selftests before benchmark (default: off)\n"
     "  -j, --json              Output JSON format (default: off)\n"
     "  --sample-every=N        Sample every N iterations (default: 0 = off)\n"
     "  --dump-proof            Run RTM_GETACTION dump proof harness (default: off)\n"
@@ -75,7 +74,6 @@ static const struct option long_options[] = {
     {"dump-proof", no_argument, NULL, 261},
     {"pcap", required_argument, NULL, 262},
     {"nlmon-iface", required_argument, NULL, 263},
-    {"selftest", no_argument, NULL, 's'},
     {"json", no_argument, NULL, 'j'},
     {"help", no_argument, NULL, 'h'},
     {"version", no_argument, NULL, 'v'},
@@ -155,7 +153,6 @@ void gb_config_init(struct gb_config* cfg) {
     cfg->index = DEFAULT_INDEX;
     cfg->cpu = DEFAULT_CPU;
     cfg->timeout_ms = DEFAULT_TIMEOUT_MS;
-    cfg->selftest = false;
     cfg->json = false;
     cfg->sample_mode = false;
     cfg->sample_every = 0;
@@ -180,7 +177,6 @@ void gb_config_print(const struct gb_config* cfg) {
     if (cfg->cpu >= 0)
         printf("  CPU:                %d\n", cfg->cpu);
     printf("  Netlink timeout:    %d ms\n", cfg->timeout_ms);
-    printf("  Selftest:           %s\n", cfg->selftest ? "yes" : "no");
     printf("  JSON output:        %s\n", cfg->json ? "yes" : "no");
     printf("  Sampling:           %s\n", cfg->sample_mode ? "yes" : "no");
     if (cfg->sample_mode)
@@ -203,7 +199,7 @@ int gb_cli_parse(int argc, char* argv[], struct gb_config* cfg) {
 
     gb_config_init(cfg);
 
-    while ((opt = getopt_long(argc, argv, "e:i:w:r:I:x:c:t:sjhv", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "e:i:w:r:I:x:c:t:jhv", long_options, &option_index)) != -1) {
         switch (opt) {
             case 'e':
                 if (parse_u32(optarg, &cfg->entries, "entries") < 0)
@@ -256,9 +252,6 @@ int gb_cli_parse(int argc, char* argv[], struct gb_config* cfg) {
             case 260:
                 if (parse_u64(optarg, &cfg->cycle_time_ext, "cycle-time-ext") < 0)
                     return -EINVAL;
-                break;
-            case 's':
-                cfg->selftest = true;
                 break;
             case 'j':
                 cfg->json = true;

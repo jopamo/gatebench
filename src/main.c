@@ -63,7 +63,6 @@ static void print_json_header(const struct gb_config* cfg) {
     printf("    \"index\": %u,\n", cfg->index);
     printf("    \"cpu\": %d,\n", cfg->cpu);
     printf("    \"timeout_ms\": %d,\n", cfg->timeout_ms);
-    printf("    \"selftest\": %s,\n", cfg->selftest ? "true" : "false");
     printf("    \"sample_mode\": %s,\n", cfg->sample_mode ? "true" : "false");
     printf("    \"sample_every\": %u,\n", cfg->sample_every);
     printf("    \"dump_proof\": %s,\n", cfg->dump_proof ? "true" : "false");
@@ -126,22 +125,20 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    /* Run selftests if requested */
-    if (cfg.selftest) {
-        if (!cfg.json) {
-            printf("Running selftests...\n");
-        }
+    /* Run selftests before benchmark */
+    if (!cfg.json) {
+        printf("Running selftests...\n");
+    }
 
-        ret = gb_selftest_run(&cfg);
-        if (ret < 0) {
-            fprintf(stderr, "Selftests failed\n");
-            gb_nl_close(sock);
-            return EXIT_FAILURE;
-        }
+    ret = gb_selftest_run(&cfg);
+    if (ret < 0) {
+        fprintf(stderr, "Selftests failed\n");
+        gb_nl_close(sock);
+        return EXIT_FAILURE;
+    }
 
-        if (!cfg.json) {
-            printf("Selftests passed\n\n");
-        }
+    if (!cfg.json) {
+        printf("Selftests passed\n\n");
     }
 
     if (cfg.dump_proof) {

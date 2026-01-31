@@ -54,9 +54,6 @@ sudo ./build/src/gatebench --entries 10
 # Benchmark with 100 entries, 1000 iterations
 sudo ./build/src/gatebench --entries 100 --iters 1000
 
-# Run selftests before benchmark
-sudo ./build/src/gatebench --entries 50 --selftest
-
 # Output JSON for machine processing
 sudo ./build/src/gatebench --entries 20 --json > results.json
 ```
@@ -83,7 +80,6 @@ Gate shape options:
   --cycle-time=NS         Cycle time for gate schedule (default: 0)
 
 Mode options:
-  -s, --selftest          Run selftests before benchmark (default: off)
   -j, --json              Output JSON format (default: off)
   --sample-every=N        Sample every N iterations (default: 0 = no sampling)
 
@@ -172,7 +168,7 @@ gatebench/
 - Multiple runs with statistical aggregation
 
 ### Selftests
-The selftest suite validates error paths and kernel behavior:
+The selftest suite validates error paths and kernel behavior and runs on startup:
 - Create missing entry list → `-EINVAL`
 - Create empty entry list → `-EINVAL`
 - Create zero interval → `-EINVAL`
@@ -195,7 +191,6 @@ Configuration:
   Starting index:     1000
   CPU pinning:        no
   Netlink timeout:    1000 ms
-  Selftest:           no
   JSON output:        no
   Sampling:           no
   Clock ID:           3
@@ -246,7 +241,6 @@ Summary:
     "index": 1000,
     "cpu": -1,
     "timeout_ms": 1000,
-    "selftest": false,
     "sample_mode": false,
     "sample_every": 0,
     "clockid": 3,
@@ -294,8 +288,8 @@ Summary:
 
 ### Testing
 ```bash
-# Run selftests
-sudo ./build/gatebench --selftest
+# Selftests run automatically on startup
+sudo ./build/gatebench
 
 # Build and run with debug symbols
 meson setup build_debug --buildtype=debug
