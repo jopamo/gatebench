@@ -3,6 +3,7 @@
 #include "selftests/selftest_tests.h"
 #include <errno.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <string.h>
 
 static const struct gb_selftest_case internal_tests[] = {
@@ -37,6 +38,22 @@ static const struct gb_selftest_case stable_tests[] = {
 
 #define NUM_INTERNAL_TESTS (sizeof(internal_tests) / sizeof(internal_tests[0]))
 #define NUM_STABLE_TESTS (sizeof(stable_tests) / sizeof(stable_tests[0]))
+#define SOFTFAIL_LARGE_DUMP "large dump"
+#define SOFTFAIL_REPLACE_APPEND "replace append entries"
+#define SOFTFAIL_CREATE_MISSING_ENTRY_LIST "create missing entry list"
+#define SOFTFAIL_CREATE_EMPTY_ENTRY_LIST "create empty entry list"
+
+static bool is_soft_fail(const char* name, const char* const* soft_fail_names, size_t soft_fail_count) {
+    if (!name || !soft_fail_names)
+        return false;
+
+    for (size_t i = 0; i < soft_fail_count; i++) {
+        if (soft_fail_names[i] && strcmp(name, soft_fail_names[i]) == 0)
+            return true;
+    }
+
+    return false;
+}
 
 static int run_test_suite(const char* label,
                           const struct gb_selftest_case* tests,
@@ -46,10 +63,13 @@ static int run_test_suite(const char* label,
                           int* passed_out,
                           size_t* failed_out,
                           size_t* soft_failed_out,
-                          const char* soft_fail_name) {
+                          const char* const* soft_fail_names,
+                          size_t soft_fail_count,
+                          bool* large_dump_failed_out) {
     int passed = 0;
     size_t failed = 0;
     size_t soft_failed = 0;
+    bool large_dump_failed = false;
 
     printf("Running %zu %s selftests...\n", count, label);
 
@@ -69,8 +89,10 @@ static int run_test_suite(const char* label,
         else {
             printf("FAIL (got %d, expected %d)\n", ret, tests[i].expected_err);
             failed++;
-            if (soft_fail_name && strcmp(tests[i].name, soft_fail_name) == 0)
+            if (is_soft_fail(tests[i].name, soft_fail_names, soft_fail_count))
                 soft_failed++;
+            if (strcmp(tests[i].name, SOFTFAIL_LARGE_DUMP) == 0)
+                large_dump_failed = true;
         }
     }
 
@@ -82,6 +104,8 @@ static int run_test_suite(const char* label,
         *failed_out = failed;
     if (soft_failed_out)
         *soft_failed_out = soft_failed;
+    if (large_dump_failed_out)
+        *large_dump_failed_out = large_dump_failed;
 
     return failed == 0 ? 0 : -EINVAL;
 }
@@ -93,14 +117,17 @@ int gb_selftest_run(struct gb_config* cfg) {
     int stable_passed = 0;
     size_t stable_failed = 0;
     size_t stable_soft_failed = 0;
+    bool large_dump_failed = false;
     int ret_internal;
     int ret_stable;
     int ret;
+    static const char* const soft_fail_tests[] = {SOFTFAIL_LARGE_DUMP, SOFTFAIL_REPLACE_APPEND,
+                                                  SOFTFAIL_CREATE_MISSING_ENTRY_LIST, SOFTFAIL_CREATE_EMPTY_ENTRY_LIST};
 
     base_index = cfg->index;
 
     ret_internal = run_test_suite("internal", internal_tests, NUM_INTERNAL_TESTS, NULL, base_index, &internal_passed,
-                                  NULL, NULL, NULL);
+                                  NULL, NULL, NULL, 0, NULL);
 
     ret = gb_nl_open(&sock);
     if (ret < 0) {
@@ -109,22 +136,25 @@ int gb_selftest_run(struct gb_config* cfg) {
     }
 
     ret_stable = run_test_suite("stable regression", stable_tests, NUM_STABLE_TESTS, sock, base_index, &stable_passed,
-                                &stable_failed, &stable_soft_failed, "large dump");
+                                &stable_failed, &stable_soft_failed, soft_fail_tests,
+                                sizeof(soft_fail_tests) / sizeof(soft_fail_tests[0]), &large_dump_failed);
 
     gb_nl_close(sock);
 
     printf("Selftests total: %d/%zu passed\n", internal_passed + stable_passed, NUM_INTERNAL_TESTS + NUM_STABLE_TESTS);
 
     if (stable_soft_failed > 0 && stable_failed == stable_soft_failed) {
-        uint32_t old_entries = cfg->entries;
-
-        cfg->entries = 50;
         ret_stable = 0;
-        if (cfg->json) {
-            fprintf(stderr, "Large dump failed; setting benchmark entries to 50 (was %u)\n", old_entries);
-        }
-        else {
-            printf("Large dump failed; setting benchmark entries to 50 (was %u)\n", old_entries);
+        if (large_dump_failed) {
+            uint32_t old_entries = cfg->entries;
+
+            cfg->entries = 50;
+            if (cfg->json) {
+                fprintf(stderr, "Large dump failed; setting benchmark entries to 50 (was %u)\n", old_entries);
+            }
+            else {
+                printf("Large dump failed; setting benchmark entries to 50 (was %u)\n", old_entries);
+            }
         }
     }
 
