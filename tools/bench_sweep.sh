@@ -13,7 +13,6 @@ RUNS="${RUNS:-5}"
 INTERVAL_NS="${INTERVAL_NS:-1000000}"
 INDEX="${INDEX:-1000}"
 TIMEOUT_MS="${TIMEOUT_MS:-1000}"
-SELFTEST="${SELFTEST:-0}"
 JSON="${JSON:-1}"
 
 # Entry sweep values (powers of 2)
@@ -102,9 +101,6 @@ CMD="$CMD --entries $entries"
         CMD="$CMD --cpu $CPU"
     fi
     
-    if [ "$SELFTEST" -eq 1 ]; then
-        CMD="$CMD --selftest"
-    fi
     
     if [ "$JSON" -eq 1 ]; then
         CMD="$CMD --json"
