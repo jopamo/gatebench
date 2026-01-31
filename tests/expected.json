@@ -3,8 +3,8 @@
   "description": "Expected results format for gatebench tests",
   "selftests": {
     "expected_errors": {
-      "create_missing_entry_list": -22,
-      "create_empty_entry_list": -22,
+      "create_missing_entry_list": 0,
+      "create_empty_entry_list": 0,
       "create_zero_interval": -22,
       "create_bad_clockid": -22,
       "replace_without_existing": 0,

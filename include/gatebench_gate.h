@@ -44,6 +44,7 @@ struct gate_shape;
 
 /* Gate entry */
 struct gate_entry {
+    uint32_t index;    /* Entry index (from dump) */
     bool gate_state;   /* Gate state: true=open, false=closed */
     uint32_t interval; /* Interval in nanoseconds */
     int32_t ipv;       /* IP version (-1 for any) */
@@ -61,6 +62,14 @@ struct gate_dump {
     int32_t priority;
     struct gate_entry* entries;
     uint32_t num_entries;
+    struct tcf_t tm;
+    bool has_tm;
+    bool has_basic_stats;
+    bool has_queue_stats;
+    uint64_t bytes;
+    uint64_t packets;
+    uint32_t drops;
+    uint32_t overlimits;
 };
 
 /* Calculate message capacity needed for gate action */

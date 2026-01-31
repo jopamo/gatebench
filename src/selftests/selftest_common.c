@@ -22,6 +22,7 @@ void gb_selftest_entry_default(struct gate_entry* entry) {
         return;
     }
 
+    entry->index = 0;
     entry->gate_state = true;
     entry->interval = GB_SELFTEST_DEFAULT_INTERVAL_NS;
     entry->ipv = -1;

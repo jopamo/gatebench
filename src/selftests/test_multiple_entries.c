@@ -16,16 +16,19 @@ int gb_selftest_multiple_entries(struct gb_nl_sock* sock, uint32_t base_index) {
     shape.cycle_time = 3000000;
 
     entries[0].gate_state = true;
+    entries[0].index = 0;
     entries[0].interval = 1000000;
     entries[0].ipv = 4;
     entries[0].maxoctets = 100;
 
     entries[1].gate_state = false;
+    entries[1].index = 1;
     entries[1].interval = 1000000;
     entries[1].ipv = 6;
     entries[1].maxoctets = 200;
 
     entries[2].gate_state = true;
+    entries[2].index = 2;
     entries[2].interval = 1000000;
     entries[2].ipv = -1;
     entries[2].maxoctets = -1;
@@ -61,8 +64,9 @@ int gb_selftest_multiple_entries(struct gb_nl_sock* sock, uint32_t base_index) {
     }
 
     for (i = 0; i < 3; i++) {
-        if (dump.entries[i].gate_state != entries[i].gate_state || dump.entries[i].interval != entries[i].interval ||
-            dump.entries[i].ipv != entries[i].ipv || dump.entries[i].maxoctets != entries[i].maxoctets) {
+        if (dump.entries[i].index != i || dump.entries[i].gate_state != entries[i].gate_state ||
+            dump.entries[i].interval != entries[i].interval || dump.entries[i].ipv != entries[i].ipv ||
+            dump.entries[i].maxoctets != entries[i].maxoctets) {
             printf("Entry %u mismatch\n", i);
             test_ret = -EINVAL;
             break;

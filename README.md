@@ -168,7 +168,7 @@ gatebench/
 - Multiple runs with statistical aggregation
 
 ### Selftests
-The selftest suite validates error paths and kernel behavior and runs on startup:
+The selftest suite runs on startup and is split into an internal suite and a stable-regression suite that exercises kernel behavior:
 - Create missing entry list → `-EINVAL`
 - Create empty entry list → `-EINVAL`
 - Create zero interval → `-EINVAL`
