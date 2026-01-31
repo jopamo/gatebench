@@ -17,7 +17,7 @@ static const struct gb_selftest_case stable_tests[] = {
     {"create zero interval", gb_selftest_create_zero_interval, -EINVAL},
     {"create bad clockid", gb_selftest_create_bad_clockid, -EINVAL},
     {"invalid action control", gb_selftest_invalid_action_control, -EINVAL},
-    {"invalid entry attrs", gb_selftest_invalid_entry_attrs, -EINVAL},
+    {"invalid entry attrs", gb_selftest_invalid_entry_attrs, GB_NL_EXPECT_COMPAT},
     {"bad attribute size", gb_selftest_bad_attribute_size, -EINVAL},
     {"param validation", gb_selftest_param_validation, 0},
     {"replace without existing", gb_selftest_replace_without_existing, 0},

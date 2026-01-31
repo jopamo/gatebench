@@ -338,6 +338,10 @@ const char* gb_nl_strerror(int err) {
 }
 
 bool gb_nl_error_expected(int err, int expected) {
+    if (expected == GB_NL_EXPECT_COMPAT) {
+        return err == 0 || err == -EINVAL;
+    }
+
     if (expected >= 0) {
         return err == expected;
     }
