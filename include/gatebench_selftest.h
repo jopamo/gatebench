@@ -3,7 +3,7 @@
 
 #include "gatebench.h"
 
-/* Run selftests */
-int gb_selftest_run(const struct gb_config* cfg);
+/* Run selftests. Returns 0 on full pass, >0 for soft failures, <0 on hard failures. */
+int gb_selftest_run(struct gb_config* cfg);
 
 #endif /* GATEBENCH_SELFTEST_H */
