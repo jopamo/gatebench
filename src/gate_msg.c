@@ -166,7 +166,7 @@ int build_gate_delaction(struct gb_nl_msg* msg, uint32_t index) {
     return 0;
 }
 
-int build_gate_getaction(struct gb_nl_msg* msg, uint32_t index) {
+int build_gate_getaction_ex(struct gb_nl_msg* msg, uint32_t index, uint16_t nlmsg_flags) {
     struct nlmsghdr* nlh;
     struct tcamsg* tca;
     struct nlattr *nest_tab, *nest_prio;
@@ -176,7 +176,7 @@ int build_gate_getaction(struct gb_nl_msg* msg, uint32_t index) {
 
     nlh = mnl_nlmsg_put_header(msg->buf);
     nlh->nlmsg_type = RTM_GETACTION;
-    nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK;
+    nlh->nlmsg_flags = NLM_F_REQUEST | nlmsg_flags;
     nlh->nlmsg_seq = 0;
 
     tca = mnl_nlmsg_put_extra_header(nlh, sizeof(*tca));
@@ -194,6 +194,10 @@ int build_gate_getaction(struct gb_nl_msg* msg, uint32_t index) {
 
     msg->len = nlh->nlmsg_len;
     return 0;
+}
+
+int build_gate_getaction(struct gb_nl_msg* msg, uint32_t index) {
+    return build_gate_getaction_ex(msg, index, NLM_F_ACK);
 }
 
 void gb_gate_dump_free(struct gate_dump* dump) {

@@ -4,6 +4,7 @@ gatebench_sources = files(
   'cli.c',
   'bench.c',
   'selftest.c',
+  'proof.c',
   'nl.c',
   'gate_msg.c',
   'stats.c',
@@ -42,6 +43,7 @@ gatebench_headers = files(
   '../include/gatebench_util.h',
   '../include/gatebench_bench.h',
   '../include/gatebench_selftest.h',
+  '../include/gatebench_proof.h',
 )
 
 # Build targets
@@ -49,7 +51,7 @@ gatebench_exe = executable(
   'gatebench',
   gatebench_sources,
   include_directories: incdir,
-  dependencies: [libmnl_dep, math_dep],
+  dependencies: [libmnl_dep, math_dep, libpcap_dep, threads_dep],
   install: true,
   install_dir: get_option('bindir'),
 )

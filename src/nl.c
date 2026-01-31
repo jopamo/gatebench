@@ -236,6 +236,98 @@ out:
     return ret;
 }
 
+int gb_nl_dump_action(struct gb_nl_sock* sock, struct gb_nl_msg* req, struct gb_dump_stats* stats, int timeout_ms) {
+    struct gb_nl_msg* resp = NULL;
+    struct nlmsghdr* nlh;
+    struct pollfd pfd;
+    uint32_t seq;
+    ssize_t ret;
+    int len;
+
+    if (!sock || !sock->nl || !req || !stats)
+        return -EINVAL;
+
+    memset(stats, 0, sizeof(*stats));
+
+    if (req->len > req->cap)
+        return -EINVAL;
+
+    resp = gb_nl_msg_alloc(1024u * 1024u);
+    if (!resp)
+        return -ENOMEM;
+
+    seq = gb_nl_next_seq(sock);
+    nlh = (struct nlmsghdr*)req->buf;
+    nlh->nlmsg_seq = seq;
+
+    ret = mnl_socket_sendto(sock->nl, req->buf, req->len);
+    if (ret < 0) {
+        gb_nl_msg_free(resp);
+        return -errno;
+    }
+
+    if ((size_t)ret != req->len) {
+        gb_nl_msg_free(resp);
+        return -EIO;
+    }
+
+    pfd.fd = mnl_socket_get_fd(sock->nl);
+    pfd.events = POLLIN;
+
+    for (;;) {
+        ret = poll(&pfd, 1, timeout_ms);
+        if (ret < 0) {
+            gb_nl_msg_free(resp);
+            return -errno;
+        }
+        if (ret == 0) {
+            gb_nl_msg_free(resp);
+            return -ETIMEDOUT;
+        }
+
+        ret = mnl_socket_recvfrom(sock->nl, resp->buf, resp->cap);
+        if (ret < 0) {
+            gb_nl_msg_free(resp);
+            return -errno;
+        }
+
+        resp->len = (size_t)ret;
+        len = (int)ret;
+        nlh = (struct nlmsghdr*)resp->buf;
+
+        while (mnl_nlmsg_ok(nlh, len)) {
+            if (nlh->nlmsg_seq != seq) {
+                nlh = mnl_nlmsg_next(nlh, &len);
+                continue;
+            }
+
+            if (nlh->nlmsg_type == NLMSG_ERROR) {
+                int err = parse_error(nlh);
+                if (err != 0) {
+                    stats->saw_error = true;
+                    stats->error_code = err;
+                    gb_nl_msg_free(resp);
+                    return 0;
+                }
+                nlh = mnl_nlmsg_next(nlh, &len);
+                continue;
+            }
+
+            if (nlh->nlmsg_type == NLMSG_DONE) {
+                stats->saw_done = true;
+                gb_nl_msg_free(resp);
+                return 0;
+            }
+
+            stats->reply_msgs++;
+            if (nlh->nlmsg_len >= NLMSG_HDRLEN)
+                stats->payload_bytes += (uint64_t)(nlh->nlmsg_len - NLMSG_HDRLEN);
+
+            nlh = mnl_nlmsg_next(nlh, &len);
+        }
+    }
+}
+
 const char* gb_nl_strerror(int err) {
     /* Netlink errors are negative errno values */
     if (err >= 0) {

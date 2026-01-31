@@ -20,10 +20,13 @@ struct gb_config {
     int timeout_ms; /* Netlink timeout in milliseconds */
 
     /* Mode flags */
-    bool selftest;         /* Run selftests before benchmark */
-    bool json;             /* Output JSON format */
-    bool sample_mode;      /* Sample every N iterations */
-    uint32_t sample_every; /* Sampling interval */
+    bool selftest;           /* Run selftests before benchmark */
+    bool json;               /* Output JSON format */
+    bool sample_mode;        /* Sample every N iterations */
+    uint32_t sample_every;   /* Sampling interval */
+    bool dump_proof;         /* Run dump proof harness */
+    const char* pcap_path;   /* Output pcap path (nlmon capture) */
+    const char* nlmon_iface; /* nlmon interface name */
 
     /* Gate shape parameters */
 

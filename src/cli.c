@@ -21,6 +21,7 @@
 #define DEFAULT_CLOCKID CLOCK_TAI
 #define DEFAULT_BASE_TIME 0ull
 #define DEFAULT_CYCLE_TIME 0ull
+#define DEFAULT_NLMON_IFACE "nlmon0"
 
 static const char* usage_str =
     "Usage: gatebench [OPTIONS]\n"
@@ -49,6 +50,9 @@ static const char* usage_str =
     "  -s, --selftest          Run selftests before benchmark (default: off)\n"
     "  -j, --json              Output JSON format (default: off)\n"
     "  --sample-every=N        Sample every N iterations (default: 0 = off)\n"
+    "  --dump-proof            Run RTM_GETACTION dump proof harness (default: off)\n"
+    "  --pcap=PATH             Write nlmon capture to PATH (default: off)\n"
+    "  --nlmon-iface=NAME      nlmon interface for capture (default: nlmon0)\n"
     "\n"
     "Other options:\n"
     "  -h, --help              Show this help message\n"
@@ -68,6 +72,9 @@ static const struct option long_options[] = {
     {"cycle-time", required_argument, NULL, 258},
     {"sample-every", required_argument, NULL, 259},
     {"cycle-time-ext", required_argument, NULL, 260},
+    {"dump-proof", no_argument, NULL, 261},
+    {"pcap", required_argument, NULL, 262},
+    {"nlmon-iface", required_argument, NULL, 263},
     {"selftest", no_argument, NULL, 's'},
     {"json", no_argument, NULL, 'j'},
     {"help", no_argument, NULL, 'h'},
@@ -152,6 +159,9 @@ void gb_config_init(struct gb_config* cfg) {
     cfg->json = false;
     cfg->sample_mode = false;
     cfg->sample_every = 0;
+    cfg->dump_proof = false;
+    cfg->pcap_path = NULL;
+    cfg->nlmon_iface = DEFAULT_NLMON_IFACE;
     cfg->clockid = DEFAULT_CLOCKID;
     cfg->base_time = DEFAULT_BASE_TIME;
     cfg->cycle_time = DEFAULT_CYCLE_TIME;
@@ -175,6 +185,11 @@ void gb_config_print(const struct gb_config* cfg) {
     printf("  Sampling:           %s\n", cfg->sample_mode ? "yes" : "no");
     if (cfg->sample_mode)
         printf("  Sample every:       %u iterations\n", cfg->sample_every);
+    printf("  Dump proof:         %s\n", cfg->dump_proof ? "yes" : "no");
+    if (cfg->dump_proof) {
+        printf("  nlmon iface:        %s\n", cfg->nlmon_iface ? cfg->nlmon_iface : "(none)");
+        printf("  pcap output:        %s\n", cfg->pcap_path ? cfg->pcap_path : "(disabled)");
+    }
     printf("  Clock ID:           %u\n", cfg->clockid);
     printf("  Base time:          %llu ns\n", (unsigned long long)cfg->base_time);
     printf("  Cycle time:         %llu ns\n", (unsigned long long)cfg->cycle_time);
@@ -253,6 +268,15 @@ int gb_cli_parse(int argc, char* argv[], struct gb_config* cfg) {
                     return -EINVAL;
                 cfg->sample_mode = cfg->sample_every > 0;
                 break;
+            case 261:
+                cfg->dump_proof = true;
+                break;
+            case 262:
+                cfg->pcap_path = optarg;
+                break;
+            case 263:
+                cfg->nlmon_iface = optarg;
+                break;
             case 'h':
                 print_usage();
                 exit(0);
@@ -291,6 +315,9 @@ int gb_cli_parse(int argc, char* argv[], struct gb_config* cfg) {
         fprintf(stderr, "Error: sample-every cannot exceed iterations\n");
         return -EINVAL;
     }
+
+    if (cfg->pcap_path && !cfg->dump_proof)
+        cfg->dump_proof = true;
 
     return 0;
 }

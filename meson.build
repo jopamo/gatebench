@@ -67,6 +67,16 @@ endforeach
 # Dependencies
 libmnl_dep = dependency('libmnl', required: true)
 math_dep = cc.find_library('m', required: true)
+threads_dep = dependency('threads')
+
+pcap_opt = get_option('pcap')
+libpcap_dep = disabler()
+if not pcap_opt.disabled()
+  libpcap_dep = dependency('libpcap', required: pcap_opt.enabled())
+endif
+if libpcap_dep.found()
+  add_project_arguments('-DGATEBENCH_HAVE_PCAP', language: 'c')
+endif
 
 # Include directories
 incdir = include_directories('include')
