@@ -29,6 +29,7 @@ gatebench_sources = files(
   'selftests/test_multiple_entries.c',
   'selftests/test_malformed_nesting.c',
   'selftests/test_invalid_action_control.c',
+  'selftests/test_invalid_entry_attrs.c',
   'selftests/test_bad_attribute_size.c',
   'selftests/test_param_validation.c',
   'selftests/test_replace_invalid.c',
