@@ -148,12 +148,14 @@ int gb_selftest_run(struct gb_config* cfg) {
         if (large_dump_failed) {
             uint32_t old_entries = cfg->entries;
 
-            cfg->entries = 50;
-            if (cfg->json) {
-                fprintf(stderr, "Large dump failed; setting benchmark entries to 50 (was %u)\n", old_entries);
-            }
-            else {
-                printf("Large dump failed; setting benchmark entries to 50 (was %u)\n", old_entries);
+            if (old_entries > 50) {
+                cfg->entries = 50;
+                if (cfg->json) {
+                    fprintf(stderr, "Large dump failed; setting benchmark entries to 50 (was %u)\n", old_entries);
+                }
+                else {
+                    printf("Large dump failed; setting benchmark entries to 50 (was %u)\n", old_entries);
+                }
             }
         }
     }
