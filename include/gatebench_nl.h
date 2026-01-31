@@ -15,6 +15,14 @@ struct gb_nl_msg {
     size_t len;
 };
 
+struct gb_dump_stats {
+    uint32_t reply_msgs;
+    uint64_t payload_bytes;
+    bool saw_done;
+    bool saw_error;
+    int error_code;
+};
+
 /* Initialize netlink socket */
 int gb_nl_open(struct gb_nl_sock** sock);
 
@@ -38,6 +46,7 @@ struct gate_dump;
 
 /* Get gate action by index */
 int gb_nl_get_action(struct gb_nl_sock* sock, uint32_t index, struct gate_dump* dump, int timeout_ms);
+int gb_nl_dump_action(struct gb_nl_sock* sock, struct gb_nl_msg* req, struct gb_dump_stats* stats, int timeout_ms);
 
 /* Get error string from netlink error */
 const char* gb_nl_strerror(int err);

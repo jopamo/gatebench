@@ -5,6 +5,7 @@
 #include "../include/gatebench_util.h"
 #include "../include/gatebench_bench.h"
 #include "../include/gatebench_selftest.h"
+#include "../include/gatebench_proof.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,6 +66,15 @@ static void print_json_header(const struct gb_config* cfg) {
     printf("    \"selftest\": %s,\n", cfg->selftest ? "true" : "false");
     printf("    \"sample_mode\": %s,\n", cfg->sample_mode ? "true" : "false");
     printf("    \"sample_every\": %u,\n", cfg->sample_every);
+    printf("    \"dump_proof\": %s,\n", cfg->dump_proof ? "true" : "false");
+    if (cfg->pcap_path)
+        printf("    \"pcap_path\": \"%s\",\n", cfg->pcap_path);
+    else
+        printf("    \"pcap_path\": null,\n");
+    if (cfg->nlmon_iface)
+        printf("    \"nlmon_iface\": \"%s\",\n", cfg->nlmon_iface);
+    else
+        printf("    \"nlmon_iface\": null,\n");
     printf("    \"clockid\": %u,\n", cfg->clockid);
     printf("    \"base_time\": %lu,\n", cfg->base_time);
     printf("    \"cycle_time\": %lu\n", cfg->cycle_time);
@@ -132,6 +142,26 @@ int main(int argc, char* argv[]) {
         if (!cfg.json) {
             printf("Selftests passed\n\n");
         }
+    }
+
+    if (cfg.dump_proof) {
+        struct gb_dump_summary dump_summary;
+
+        if (!cfg.json) {
+            printf("Running dump proof harness...\n");
+        }
+
+        ret = gb_proof_run(&cfg, &dump_summary);
+        if (!cfg.json) {
+            gb_proof_print_summary(&dump_summary, &cfg);
+            printf("\n");
+        }
+        else {
+            print_json_footer();
+        }
+
+        gb_nl_close(sock);
+        return ret < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
     }
 
     /* Run benchmark */

@@ -11,3 +11,9 @@ option('verbose_logs',
   description: 'Enable verbose logging',
   value: false
 )
+
+option('pcap',
+  type: 'feature',
+  description: 'Enable libpcap capture support',
+  value: 'auto'
+)
