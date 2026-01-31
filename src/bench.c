@@ -4,6 +4,7 @@
 #include "../include/gatebench_nl.h"
 #include "../include/gatebench_stats.h"
 #include "../include/gatebench_util.h"
+#include "bench_internal.h"
 
 #include <errno.h>
 #include <libmnl/libmnl.h>
@@ -14,18 +15,36 @@
 #include <string.h>
 #include <time.h>
 
-static int fill_entries(struct gate_entry* entries, uint32_t n, uint64_t interval_ns) {
+int gb_fill_entries(struct gate_entry* entries, uint32_t n, uint64_t interval_ns) {
     if (!entries || n == 0)
         return 0;
 
-    if (interval_ns > UINT32_MAX)
+    if (interval_ns > UINT32_MAX || interval_ns == 0)
         return -ERANGE;
 
     for (uint32_t i = 0; i < n; i++) {
-        entries[i].gate_state = true;
+        bool guard_slot = (n >= 10u) && ((i + 1u) % 10u == 0u);
+
         entries[i].interval = (uint32_t)interval_ns;
-        entries[i].ipv = -1;
-        entries[i].maxoctets = -1;
+
+        if (guard_slot) {
+            entries[i].gate_state = false;
+            entries[i].ipv = -1;
+            entries[i].maxoctets = -1;
+            continue;
+        }
+
+        entries[i].gate_state = true;
+
+        /* tc gate "ipv" attribute is internal priority; use it to model class windows. */
+        if ((i % 2u) == 0u) {
+            entries[i].ipv = 7;
+            entries[i].maxoctets = 8192;
+        }
+        else {
+            entries[i].ipv = 0;
+            entries[i].maxoctets = 32768;
+        }
     }
 
     return 0;
@@ -86,7 +105,7 @@ static int benchmark_single_run(struct gb_nl_sock* sock, const struct gb_config*
             goto out;
         }
 
-        ret = fill_entries(entries, cfg->entries, cfg->interval_ns);
+        ret = gb_fill_entries(entries, cfg->entries, cfg->interval_ns);
         if (ret < 0)
             goto out;
     }
