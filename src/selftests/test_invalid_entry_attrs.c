@@ -98,8 +98,6 @@ int gb_selftest_invalid_entry_attrs(struct gb_nl_sock* sock, uint32_t base_index
     int test_ret = 0;
     bool saw_einval = false;
 
-    printf("compat: kernel may skip malformed entry attrs or reject them\n");
-
     ret = gb_selftest_alloc_msgs(&msg, &resp, 1024);
     if (ret < 0) {
         return ret;
@@ -109,7 +107,6 @@ int gb_selftest_invalid_entry_attrs(struct gb_nl_sock* sock, uint32_t base_index
         uint32_t index = base_index + (uint32_t)i;
 
         ret = send_invalid_entry(sock, msg, resp, index, i);
-        printf("  case %d -> %d\n", i, ret);
         if (ret == -EINVAL) {
             saw_einval = true;
         }
