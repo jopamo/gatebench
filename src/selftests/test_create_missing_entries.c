@@ -1,5 +1,6 @@
 #include "selftest_tests.h"
 #include <errno.h>
+#include <stdio.h>
 #include <string.h>
 
 int gb_selftest_create_missing_entries(struct gb_nl_sock* sock, uint32_t base_index) {
@@ -10,7 +11,9 @@ int gb_selftest_create_missing_entries(struct gb_nl_sock* sock, uint32_t base_in
     struct nlattr *nest_tab, *nest_prio, *nest_opts;
     struct gate_shape shape;
     struct tc_gate gate_params;
+    struct gate_dump dump;
     int ret;
+    int test_ret = 0;
 
     gb_selftest_shape_default(&shape, 1);
 
@@ -51,7 +54,28 @@ int gb_selftest_create_missing_entries(struct gb_nl_sock* sock, uint32_t base_in
     msg->len = nlh->nlmsg_len;
 
     ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto out;
+    }
 
+    ret = gb_nl_get_action(sock, base_index, &dump, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    if (dump.num_entries != 0) {
+        printf("Missing entry list accepted but created %u entries\n", dump.num_entries);
+        test_ret = -EINVAL;
+    }
+
+    gb_gate_dump_free(&dump);
+
+cleanup:
+    gb_selftest_cleanup_gate(sock, msg, resp, base_index);
+
+out:
     gb_selftest_free_msgs(msg, resp);
-    return ret;
+    return test_ret;
 }

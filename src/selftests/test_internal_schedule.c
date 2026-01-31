@@ -22,6 +22,9 @@ int gb_selftest_internal_schedule_pattern(struct gb_nl_sock* sock, uint32_t base
     for (uint32_t i = 0; i < entries; i++) {
         bool guard_slot = ((i + 1u) % 10u) == 0u;
 
+        if (schedule[i].index != i)
+            return -EINVAL;
+
         if (schedule[i].interval != (uint32_t)interval_ns)
             return -EINVAL;
 
@@ -52,6 +55,8 @@ int gb_selftest_internal_schedule_pattern(struct gb_nl_sock* sock, uint32_t base
         return ret;
 
     for (uint32_t i = 0; i < 8u; i++) {
+        if (small[i].index != i)
+            return -EINVAL;
         if (!small[i].gate_state)
             return -EINVAL;
         if (small[i].interval != (uint32_t)interval_ns)

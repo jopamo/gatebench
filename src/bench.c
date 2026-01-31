@@ -25,6 +25,7 @@ int gb_fill_entries(struct gate_entry* entries, uint32_t n, uint64_t interval_ns
     for (uint32_t i = 0; i < n; i++) {
         bool guard_slot = (n >= 10u) && ((i + 1u) % 10u == 0u);
 
+        entries[i].index = i;
         entries[i].interval = (uint32_t)interval_ns;
 
         if (guard_slot) {

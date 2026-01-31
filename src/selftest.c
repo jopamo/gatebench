@@ -9,31 +9,32 @@ static const struct gb_selftest_case internal_tests[] = {
     {"schedule pattern", gb_selftest_internal_schedule_pattern, 0},
 };
 
-static const struct gb_selftest_case kernel_tests[] = {
+static const struct gb_selftest_case stable_tests[] = {
     {"create missing parms", gb_selftest_create_missing_parms, -EINVAL},
-    {"create missing entry list", gb_selftest_create_missing_entries, -EINVAL},
-    {"create empty entry list", gb_selftest_create_empty_entries, -EINVAL},
+    {"create missing entry list", gb_selftest_create_missing_entries, 0},
+    {"create empty entry list", gb_selftest_create_empty_entries, 0},
+    {"malformed nesting", gb_selftest_malformed_nesting, 0},
     {"create zero interval", gb_selftest_create_zero_interval, -EINVAL},
     {"create bad clockid", gb_selftest_create_bad_clockid, -EINVAL},
+    {"bad attribute size", gb_selftest_bad_attribute_size, -EINVAL},
+    {"param validation", gb_selftest_param_validation, 0},
     {"replace without existing", gb_selftest_replace_without_existing, 0},
     {"duplicate create", gb_selftest_duplicate_create, -EEXIST},
-    {"dump correctness", gb_selftest_dump_correctness, 0},
+    {"replace preserve schedule", gb_selftest_replace_preserve_schedule, 0},
+    {"replace append entries", gb_selftest_replace_append_entries, 0},
+    {"base time update", gb_selftest_base_time_update, 0},
     {"replace persistence", gb_selftest_replace_persistence, 0},
     {"clockid variants", gb_selftest_clockid_variants, 0},
     {"cycle time derivation", gb_selftest_cycle_time_derivation, 0},
     {"cycle time extension parsing", gb_selftest_cycle_time_ext_parsing, 0},
-    {"replace preserve schedule", gb_selftest_replace_preserve_schedule, 0},
-    {"base time update", gb_selftest_base_time_update, 0},
+    {"dump correctness", gb_selftest_dump_correctness, 0},
     {"multiple entries", gb_selftest_multiple_entries, 0},
-    {"malformed nesting", gb_selftest_malformed_nesting, -EINVAL},
-    {"bad attribute size", gb_selftest_bad_attribute_size, -EINVAL},
-    {"param validation", gb_selftest_param_validation, 0},
     {"replace invalid", gb_selftest_replace_invalid, 0},
     {"large dump", gb_selftest_large_dump, 0},
 };
 
 #define NUM_INTERNAL_TESTS (sizeof(internal_tests) / sizeof(internal_tests[0]))
-#define NUM_KERNEL_TESTS (sizeof(kernel_tests) / sizeof(kernel_tests[0]))
+#define NUM_STABLE_TESTS (sizeof(stable_tests) / sizeof(stable_tests[0]))
 
 static int run_test_suite(const char* label,
                           const struct gb_selftest_case* tests,
@@ -75,9 +76,9 @@ int gb_selftest_run(const struct gb_config* cfg) {
     struct gb_nl_sock* sock = NULL;
     uint32_t base_index;
     int internal_passed = 0;
-    int kernel_passed = 0;
+    int stable_passed = 0;
     int ret_internal;
-    int ret_kernel;
+    int ret_stable;
     int ret;
 
     base_index = cfg->index;
@@ -90,13 +91,13 @@ int gb_selftest_run(const struct gb_config* cfg) {
         return ret;
     }
 
-    ret_kernel = run_test_suite("kernel", kernel_tests, NUM_KERNEL_TESTS, sock, base_index, &kernel_passed);
+    ret_stable = run_test_suite("stable regression", stable_tests, NUM_STABLE_TESTS, sock, base_index, &stable_passed);
 
     gb_nl_close(sock);
 
-    printf("Selftests total: %d/%zu passed\n", internal_passed + kernel_passed, NUM_INTERNAL_TESTS + NUM_KERNEL_TESTS);
+    printf("Selftests total: %d/%zu passed\n", internal_passed + stable_passed, NUM_INTERNAL_TESTS + NUM_STABLE_TESTS);
 
-    if (ret_internal == 0 && ret_kernel == 0)
+    if (ret_internal == 0 && ret_stable == 0)
         return 0;
 
     return -EINVAL;

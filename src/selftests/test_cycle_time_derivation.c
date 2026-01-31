@@ -15,11 +15,13 @@ int gb_selftest_cycle_time_derivation(struct gb_nl_sock* sock, uint32_t base_ind
     shape.cycle_time = 0;
 
     entries[0].gate_state = true;
+    entries[0].index = 0;
     entries[0].interval = 500000;
     entries[0].ipv = -1;
     entries[0].maxoctets = -1;
 
     entries[1].gate_state = false;
+    entries[1].index = 1;
     entries[1].interval = 1500000;
     entries[1].ipv = -1;
     entries[1].maxoctets = -1;

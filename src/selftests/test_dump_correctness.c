@@ -41,9 +41,9 @@ int gb_selftest_dump_correctness(struct gb_nl_sock* sock, uint32_t base_index) {
     }
 
     if (dump.index != base_index || dump.clockid != shape.clockid || dump.base_time != shape.base_time ||
-        dump.cycle_time != shape.cycle_time || dump.num_entries != 1 ||
+        dump.cycle_time != shape.cycle_time || dump.num_entries != 1 || dump.entries[0].index != 0 ||
         dump.entries[0].gate_state != entry.gate_state || dump.entries[0].interval != entry.interval ||
-        dump.entries[0].ipv != entry.ipv || dump.entries[0].maxoctets != entry.maxoctets) {
+        dump.entries[0].ipv != entry.ipv || dump.entries[0].maxoctets != entry.maxoctets || !dump.has_tm) {
         test_ret = -EINVAL;
     }
 

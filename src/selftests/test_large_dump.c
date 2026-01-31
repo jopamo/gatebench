@@ -22,6 +22,7 @@ int gb_selftest_large_dump(struct gb_nl_sock* sock, uint32_t base_index) {
     gb_selftest_shape_default(&shape, num_entries);
     for (uint32_t i = 0; i < num_entries; i++) {
         gb_selftest_entry_default(&entries[i]);
+        entries[i].index = i;
         entries[i].interval = 100000 + i;
         entries[i].gate_state = (i % 2) == 0;
         cycle_time += entries[i].interval;
@@ -64,7 +65,7 @@ int gb_selftest_large_dump(struct gb_nl_sock* sock, uint32_t base_index) {
     else {
         /* Check a few entries */
         for (uint32_t i = 0; i < num_entries; i++) {
-            if (dump.entries[i].interval != entries[i].interval ||
+            if (dump.entries[i].index != i || dump.entries[i].interval != entries[i].interval ||
                 dump.entries[i].gate_state != entries[i].gate_state) {
                 printf("Large dump data mismatch at entry %u\n", i);
                 test_ret = -EINVAL;

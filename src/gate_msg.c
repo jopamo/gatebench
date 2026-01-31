@@ -4,6 +4,7 @@
 
 #include <errno.h>
 #include <libmnl/libmnl.h>
+#include <linux/gen_stats.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -231,6 +232,9 @@ static int parse_gate_entries_cb(const struct nlattr* attr, void* data) {
 
     entry->gate_state = tb[TCA_GATE_ENTRY_GATE] != NULL;
 
+    if (tb[TCA_GATE_ENTRY_INDEX])
+        entry->index = mnl_attr_get_u32(tb[TCA_GATE_ENTRY_INDEX]);
+
     if (tb[TCA_GATE_ENTRY_INTERVAL])
         entry->interval = mnl_attr_get_u32(tb[TCA_GATE_ENTRY_INTERVAL]);
 
@@ -282,6 +286,38 @@ static int parse_gate_options(struct nlattr* attr, struct gate_dump* dump) {
             return -1;
     }
 
+    if (tb[TCA_GATE_TM]) {
+        const struct tcf_t* tm = mnl_attr_get_payload(tb[TCA_GATE_TM]);
+        dump->tm = *tm;
+        dump->has_tm = true;
+    }
+
+    return 0;
+}
+
+static int parse_action_stats(struct nlattr* attr, struct gate_dump* dump) {
+    struct nlattr* tb[TCA_STATS_MAX + 1] = {NULL};
+
+    if (!attr || !dump)
+        return -1;
+
+    if (mnl_attr_parse_nested(attr, mnl_attr_cb_copy, tb) < 0)
+        return -1;
+
+    if (tb[TCA_STATS_BASIC]) {
+        const struct gnet_stats_basic* basic = mnl_attr_get_payload(tb[TCA_STATS_BASIC]);
+        dump->bytes = basic->bytes;
+        dump->packets = basic->packets;
+        dump->has_basic_stats = true;
+    }
+
+    if (tb[TCA_STATS_QUEUE]) {
+        const struct gnet_stats_queue* queue = mnl_attr_get_payload(tb[TCA_STATS_QUEUE]);
+        dump->drops = queue->drops;
+        dump->overlimits = queue->overlimits;
+        dump->has_queue_stats = true;
+    }
+
     return 0;
 }
 
@@ -300,6 +336,11 @@ static int parse_action_prio_cb(const struct nlattr* attr, void* data) {
 
     if (tb[TCA_ACT_OPTIONS]) {
         if (parse_gate_options(tb[TCA_ACT_OPTIONS], dump) < 0)
+            return MNL_CB_ERROR;
+    }
+
+    if (tb[TCA_ACT_STATS]) {
+        if (parse_action_stats(tb[TCA_ACT_STATS], dump) < 0)
             return MNL_CB_ERROR;
     }
 
