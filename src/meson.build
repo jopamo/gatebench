@@ -9,6 +9,7 @@ gatebench_sources = files(
   'stats.c',
   'util.c',
   'selftests/selftest_common.c',
+  'selftests/test_internal_schedule.c',
   'selftests/test_create_missing_parms.c',
   'selftests/test_create_missing_entries.c',
   'selftests/test_create_empty_entries.c',
