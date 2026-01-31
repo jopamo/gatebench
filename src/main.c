@@ -138,7 +138,10 @@ int main(int argc, char* argv[]) {
     }
 
     if (!cfg.json) {
-        printf("Selftests passed\n\n");
+        if (ret == 0)
+            printf("Selftests passed\n\n");
+        else
+            printf("Selftests completed with warnings\n\n");
     }
 
     if (cfg.dump_proof) {
