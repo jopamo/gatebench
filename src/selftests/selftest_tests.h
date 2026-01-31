@@ -4,6 +4,7 @@
 #include "selftest_common.h"
 
 int gb_selftest_create_missing_parms(struct gb_nl_sock* sock, uint32_t base_index);
+int gb_selftest_internal_schedule_pattern(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_create_missing_entries(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_create_empty_entries(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_create_zero_interval(struct gb_nl_sock* sock, uint32_t base_index);

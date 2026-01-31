@@ -5,7 +5,11 @@
 #include <stdio.h>
 #include <string.h>
 
-static const struct gb_selftest_case tests[] = {
+static const struct gb_selftest_case internal_tests[] = {
+    {"schedule pattern", gb_selftest_internal_schedule_pattern, 0},
+};
+
+static const struct gb_selftest_case kernel_tests[] = {
     {"create missing parms", gb_selftest_create_missing_parms, -EINVAL},
     {"create missing entry list", gb_selftest_create_missing_entries, -EINVAL},
     {"create empty entry list", gb_selftest_create_empty_entries, -EINVAL},
@@ -28,27 +32,22 @@ static const struct gb_selftest_case tests[] = {
     {"large dump", gb_selftest_large_dump, 0},
 };
 
-#define NUM_TESTS (sizeof(tests) / sizeof(tests[0]))
+#define NUM_INTERNAL_TESTS (sizeof(internal_tests) / sizeof(internal_tests[0]))
+#define NUM_KERNEL_TESTS (sizeof(kernel_tests) / sizeof(kernel_tests[0]))
 
-int gb_selftest_run(const struct gb_config* cfg) {
-    struct gb_nl_sock* sock = NULL;
-    uint32_t base_index;
-    int ret;
-    size_t i;
+static int run_test_suite(const char* label,
+                          const struct gb_selftest_case* tests,
+                          size_t count,
+                          struct gb_nl_sock* sock,
+                          uint32_t base_index,
+                          int* passed_out) {
     int passed = 0;
 
-    ret = gb_nl_open(&sock);
-    if (ret < 0) {
-        fprintf(stderr, "Failed to open netlink socket: %s\n", strerror(-ret));
-        return ret;
-    }
+    printf("Running %zu %s selftests...\n", count, label);
 
-    base_index = cfg->index;
-
-    printf("Running %zu selftests...\n", NUM_TESTS);
-
-    for (i = 0; i < NUM_TESTS; i++) {
-        uint32_t test_index = base_index + (uint32_t)(i * 1024);
+    for (size_t i = 0; i < count; i++) {
+        uint32_t test_index = base_index + (uint32_t)(i * 1024u);
+        int ret;
 
         printf("  %-30s ", tests[i].name);
         fflush(stdout);
@@ -64,13 +63,41 @@ int gb_selftest_run(const struct gb_config* cfg) {
         }
     }
 
-    printf("\nSelftests: %d/%zu passed\n", passed, NUM_TESTS);
+    printf("%s selftests: %d/%zu passed\n\n", label, passed, count);
+
+    if (passed_out)
+        *passed_out = passed;
+
+    return passed == (int)count ? 0 : -EINVAL;
+}
+
+int gb_selftest_run(const struct gb_config* cfg) {
+    struct gb_nl_sock* sock = NULL;
+    uint32_t base_index;
+    int internal_passed = 0;
+    int kernel_passed = 0;
+    int ret_internal;
+    int ret_kernel;
+    int ret;
+
+    base_index = cfg->index;
+
+    ret_internal = run_test_suite("internal", internal_tests, NUM_INTERNAL_TESTS, NULL, base_index, &internal_passed);
+
+    ret = gb_nl_open(&sock);
+    if (ret < 0) {
+        fprintf(stderr, "Failed to open netlink socket: %s\n", strerror(-ret));
+        return ret;
+    }
+
+    ret_kernel = run_test_suite("kernel", kernel_tests, NUM_KERNEL_TESTS, sock, base_index, &kernel_passed);
 
     gb_nl_close(sock);
 
-    if (passed == (int)NUM_TESTS) {
+    printf("Selftests total: %d/%zu passed\n", internal_passed + kernel_passed, NUM_INTERNAL_TESTS + NUM_KERNEL_TESTS);
+
+    if (ret_internal == 0 && ret_kernel == 0)
         return 0;
-    }
 
     return -EINVAL;
 }
