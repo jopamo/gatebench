@@ -35,17 +35,21 @@ int gb_selftest_large_dump(struct gb_nl_sock* sock, uint32_t base_index) {
         return ret;
     }
 
+    /* Ensure index is free to avoid -EEXIST noise on reruns */
+    gb_selftest_cleanup_gate(sock, msg, resp, base_index);
+
     ret = build_gate_newaction(msg, base_index, &shape, entries, num_entries, NLM_F_CREATE | NLM_F_EXCL, 0, -1);
     if (ret < 0) {
         test_ret = ret;
         goto out;
     }
 
-    printf("DEBUG: msg->len = %zu\n", msg->len);
+    printf("DEBUG: large dump msg_len=%zu cap=%zu entries=%u cycle_time=%llu\n", msg->len, msg->cap, num_entries,
+           (unsigned long long)shape.cycle_time);
 
     ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
     if (ret < 0) {
-        printf("DEBUG: create failed with %d\n", ret);
+        printf("Large dump create failed: %d (%s)\n", ret, gb_nl_strerror(ret));
         test_ret = ret;
         goto out;
     }
@@ -53,7 +57,7 @@ int gb_selftest_large_dump(struct gb_nl_sock* sock, uint32_t base_index) {
     /* Verify dump */
     ret = gb_nl_get_action(sock, base_index, &dump, GB_SELFTEST_TIMEOUT_MS);
     if (ret < 0) {
-        printf("DEBUG: get_action failed with %d\n", ret);
+        printf("Large dump get_action failed: %d (%s)\n", ret, gb_nl_strerror(ret));
         test_ret = ret;
         goto cleanup;
     }

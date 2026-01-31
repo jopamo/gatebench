@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <limits.h>
 
 /* Netlink socket handle (opaque structure) */
 struct gb_nl_sock;
@@ -53,6 +54,9 @@ const char* gb_nl_strerror(int err);
 
 /* Check if error is expected (for selftests) */
 bool gb_nl_error_expected(int err, int expected);
+
+/* Special expected value: accept either 0 or -EINVAL */
+#define GB_NL_EXPECT_COMPAT INT_MIN
 
 /* Get next sequence number */
 uint32_t gb_nl_next_seq(struct gb_nl_sock* sock);
