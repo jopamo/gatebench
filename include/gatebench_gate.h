@@ -91,6 +91,8 @@ int build_gate_delaction(struct gb_nl_msg* msg, uint32_t index);
 /* Build RTM_GETACTION message */
 int build_gate_getaction(struct gb_nl_msg* msg, uint32_t index);
 int build_gate_getaction_ex(struct gb_nl_msg* msg, uint32_t index, uint16_t nlmsg_flags);
+int build_gate_flushaction(struct gb_nl_msg* msg);
+int build_gate_dumpaction(struct gb_nl_msg* msg);
 
 /* Add a gate entry to message */
 int add_gate_entry(struct gb_nl_msg* msg, const struct gate_entry* entry);

@@ -116,6 +116,46 @@ static int parse_error(const struct nlmsghdr* nlh) {
     return err->error;
 }
 
+static int nl_attr_cb_copy(const struct nlattr* attr, void* data) {
+    const struct nlattr** tb = data;
+    unsigned int type = mnl_attr_get_type(attr);
+
+    if (type <= TCA_ROOT_MAX)
+        tb[type] = attr;
+    return MNL_CB_OK;
+}
+
+static int parse_delaction_fcnt(const struct nlmsghdr* nlh, uint32_t* fcnt_out) {
+    const struct nlattr* tb[TCA_ROOT_MAX + 1] = {NULL};
+    struct nlattr* attr;
+    struct nlattr* inner;
+
+    if (!fcnt_out)
+        return -EINVAL;
+
+    if (mnl_attr_parse(nlh, sizeof(struct tcamsg), nl_attr_cb_copy, tb) < 0)
+        return -EINVAL;
+
+    if (!tb[TCA_ACT_TAB])
+        return -ENOENT;
+
+    mnl_attr_for_each_nested(attr, tb[TCA_ACT_TAB]) {
+        if (mnl_attr_get_type(attr) != 0)
+            continue;
+
+        mnl_attr_for_each_nested(inner, attr) {
+            if (mnl_attr_get_type(inner) != TCA_FCNT)
+                continue;
+            if (mnl_attr_get_payload_len(inner) < sizeof(uint32_t))
+                return -EINVAL;
+            *fcnt_out = mnl_attr_get_u32(inner);
+            return 0;
+        }
+    }
+
+    return -ENOENT;
+}
+
 static int recv_response(struct gb_nl_sock* sock, struct gb_nl_msg* resp, uint32_t expected_seq, int timeout_ms) {
     struct pollfd pfd;
     ssize_t ret;
@@ -171,6 +211,47 @@ static int recv_response(struct gb_nl_sock* sock, struct gb_nl_msg* resp, uint32
     return -ENOMSG; /* No matching sequence found */
 }
 
+static int recv_ack(struct gb_nl_sock* sock, struct gb_nl_msg* resp, uint32_t expected_seq, int timeout_ms) {
+    struct pollfd pfd;
+    ssize_t ret;
+    int len;
+    struct nlmsghdr* nlh;
+
+    if (!sock || !sock->nl || !resp) {
+        return -EINVAL;
+    }
+
+    pfd.fd = mnl_socket_get_fd(sock->nl);
+    pfd.events = POLLIN;
+
+    for (;;) {
+        ret = poll(&pfd, 1, timeout_ms);
+        if (ret < 0) {
+            return -errno;
+        }
+        if (ret == 0) {
+            return -ETIMEDOUT;
+        }
+
+        ret = mnl_socket_recvfrom(sock->nl, resp->buf, resp->cap);
+        if (ret < 0) {
+            return -errno;
+        }
+
+        resp->len = (size_t)ret;
+        len = (int)ret;
+        nlh = (struct nlmsghdr*)resp->buf;
+        while (mnl_nlmsg_ok(nlh, len)) {
+            if (nlh->nlmsg_seq == expected_seq) {
+                if (nlh->nlmsg_type == NLMSG_ERROR) {
+                    return parse_error(nlh);
+                }
+            }
+            nlh = mnl_nlmsg_next(nlh, &len);
+        }
+    }
+}
+
 int gb_nl_send_recv(struct gb_nl_sock* sock, struct gb_nl_msg* req, struct gb_nl_msg* resp, int timeout_ms) {
     ssize_t ret;
     struct nlmsghdr* nlh;
@@ -201,6 +282,103 @@ int gb_nl_send_recv(struct gb_nl_sock* sock, struct gb_nl_msg* req, struct gb_nl
 
     /* Receive response */
     return recv_response(sock, resp, seq, timeout_ms);
+}
+
+int gb_nl_send_recv_ack(struct gb_nl_sock* sock, struct gb_nl_msg* req, struct gb_nl_msg* resp, int timeout_ms) {
+    ssize_t ret;
+    struct nlmsghdr* nlh;
+    uint32_t seq;
+
+    if (!sock || !sock->nl || !req || !resp) {
+        return -EINVAL;
+    }
+
+    if (req->len > req->cap) {
+        return -EINVAL;
+    }
+
+    seq = gb_nl_next_seq(sock);
+    nlh = (struct nlmsghdr*)req->buf;
+    nlh->nlmsg_seq = seq;
+
+    ret = mnl_socket_sendto(sock->nl, req->buf, req->len);
+    if (ret < 0) {
+        return -errno;
+    }
+
+    if ((size_t)ret != req->len) {
+        return -EIO;
+    }
+
+    return recv_ack(sock, resp, seq, timeout_ms);
+}
+
+int gb_nl_send_recv_flush(struct gb_nl_sock* sock,
+                          struct gb_nl_msg* req,
+                          struct gb_nl_msg* resp,
+                          int timeout_ms,
+                          uint32_t* fcnt_out) {
+    struct pollfd pfd;
+    ssize_t ret;
+    int len;
+    struct nlmsghdr* nlh;
+    uint32_t seq;
+
+    if (!sock || !sock->nl || !req || !resp)
+        return -EINVAL;
+
+    if (req->len > req->cap)
+        return -EINVAL;
+
+    if (fcnt_out)
+        *fcnt_out = UINT32_MAX;
+
+    seq = gb_nl_next_seq(sock);
+    nlh = (struct nlmsghdr*)req->buf;
+    nlh->nlmsg_seq = seq;
+
+    ret = mnl_socket_sendto(sock->nl, req->buf, req->len);
+    if (ret < 0)
+        return -errno;
+
+    if ((size_t)ret != req->len)
+        return -EIO;
+
+    pfd.fd = mnl_socket_get_fd(sock->nl);
+    pfd.events = POLLIN;
+
+    for (;;) {
+        ret = poll(&pfd, 1, timeout_ms);
+        if (ret < 0)
+            return -errno;
+        if (ret == 0)
+            return -ETIMEDOUT;
+
+        ret = mnl_socket_recvfrom(sock->nl, resp->buf, resp->cap);
+        if (ret < 0)
+            return -errno;
+
+        resp->len = (size_t)ret;
+        len = (int)ret;
+        nlh = (struct nlmsghdr*)resp->buf;
+        while (mnl_nlmsg_ok(nlh, len)) {
+            if (nlh->nlmsg_seq != seq) {
+                nlh = mnl_nlmsg_next(nlh, &len);
+                continue;
+            }
+
+            if (nlh->nlmsg_type == RTM_DELACTION && fcnt_out) {
+                uint32_t fcnt = UINT32_MAX;
+                if (parse_delaction_fcnt(nlh, &fcnt) == 0)
+                    *fcnt_out = fcnt;
+            }
+
+            if (nlh->nlmsg_type == NLMSG_ERROR)
+                return parse_error(nlh);
+
+            nlh = mnl_nlmsg_next(nlh, &len);
+        }
+    }
 }
 
 int gb_nl_get_action(struct gb_nl_sock* sock, uint32_t index, struct gate_dump* dump, int timeout_ms) {
@@ -317,6 +495,14 @@ int gb_nl_dump_action(struct gb_nl_sock* sock, struct gb_nl_msg* req, struct gb_
                 stats->saw_done = true;
                 gb_nl_msg_free(resp);
                 return 0;
+            }
+
+            if (nlh->nlmsg_type == RTM_GETACTION) {
+                const struct nlattr* tb[TCA_ROOT_MAX + 1] = {NULL};
+
+                if (mnl_attr_parse(nlh, sizeof(struct tcamsg), nl_attr_cb_copy, tb) == 0 && tb[TCA_ROOT_COUNT]) {
+                    stats->action_count += mnl_attr_get_u32(tb[TCA_ROOT_COUNT]);
+                }
             }
 
             stats->reply_msgs++;

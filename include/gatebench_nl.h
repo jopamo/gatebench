@@ -19,6 +19,7 @@ struct gb_nl_msg {
 struct gb_dump_stats {
     uint32_t reply_msgs;
     uint64_t payload_bytes;
+    uint32_t action_count;
     bool saw_done;
     bool saw_error;
     int error_code;
@@ -48,6 +49,12 @@ struct gate_dump;
 /* Get gate action by index */
 int gb_nl_get_action(struct gb_nl_sock* sock, uint32_t index, struct gate_dump* dump, int timeout_ms);
 int gb_nl_dump_action(struct gb_nl_sock* sock, struct gb_nl_msg* req, struct gb_dump_stats* stats, int timeout_ms);
+int gb_nl_send_recv_ack(struct gb_nl_sock* sock, struct gb_nl_msg* req, struct gb_nl_msg* resp, int timeout_ms);
+int gb_nl_send_recv_flush(struct gb_nl_sock* sock,
+                          struct gb_nl_msg* req,
+                          struct gb_nl_msg* resp,
+                          int timeout_ms,
+                          uint32_t* fcnt_out);
 
 /* Get error string from netlink error */
 const char* gb_nl_strerror(int err);
