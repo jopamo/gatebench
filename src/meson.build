@@ -26,6 +26,7 @@ gatebench_sources = files(
   'selftests/test_replace_preserve_schedule.c',
   'selftests/test_replace_append_entries.c',
   'selftests/test_base_time_update.c',
+  'selftests/test_timer_list_expiry.c',
   'selftests/test_multiple_entries.c',
   'selftests/test_malformed_nesting.c',
   'selftests/test_invalid_action_control.c',

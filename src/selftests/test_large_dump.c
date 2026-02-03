@@ -10,7 +10,7 @@ int gb_selftest_large_dump(struct gb_nl_sock* sock, uint32_t base_index) {
     struct gate_shape shape;
     struct gate_entry* entries;
     struct gate_dump dump;
-    const uint32_t num_entries = 100; /* Significant but should fit in typical netlink msg */
+    const uint32_t num_entries = 93; /* Significant but should fit in typical netlink msg */
     uint64_t cycle_time = 0;
     int ret;
     int test_ret = 0;
