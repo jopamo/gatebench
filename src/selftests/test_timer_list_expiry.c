@@ -33,7 +33,8 @@ static uint64_t gb_abs_diff_u64(uint64_t a, uint64_t b) {
 
 static int gb_timer_list_find_gate(uint64_t expected_ns,
                                    uint64_t tolerance_ns,
-                                   uint64_t* found_ns,
+                                   uint64_t* found_soft_ns,
+                                   uint64_t* found_hard_ns,
                                    unsigned int* found_state,
                                    bool* soft_hard_mismatch) {
     FILE* fp;
@@ -41,6 +42,7 @@ static int gb_timer_list_find_gate(uint64_t expected_ns,
     bool saw_gate = false;
     uint64_t best_diff = UINT64_MAX;
     uint64_t best_expiry = 0;
+    uint64_t best_soft = 0;
     unsigned int best_state = 0;
     bool best_soft_hard_mismatch = false;
 
@@ -74,6 +76,7 @@ static int gb_timer_list_find_gate(uint64_t expected_ns,
         if (diff < best_diff) {
             best_diff = diff;
             best_expiry = (uint64_t)hard;
+            best_soft = (uint64_t)soft;
             best_state = state;
             best_soft_hard_mismatch = (soft != hard);
         }
@@ -84,8 +87,10 @@ static int gb_timer_list_find_gate(uint64_t expected_ns,
     if (!saw_gate)
         return -ENOENT;
 
-    if (found_ns)
-        *found_ns = best_expiry;
+    if (found_soft_ns)
+        *found_soft_ns = best_soft;
+    if (found_hard_ns)
+        *found_hard_ns = best_expiry;
     if (found_state)
         *found_state = best_state;
     if (soft_hard_mismatch)
@@ -103,14 +108,17 @@ static int gb_timer_list_expect(const char* label,
                                 uint64_t max_allowed_ns) {
     struct timespec req = {0};
     uint64_t found_expiry = 0;
+    uint64_t found_soft = 0;
     unsigned int found_state = 0;
     bool soft_hard_mismatch = false;
     int ret = -ERANGE;
+    uint64_t diff;
 
     req.tv_nsec = (long)GB_TIMER_LIST_RETRY_NS;
 
     for (int i = 0; i < GB_TIMER_LIST_RETRIES; i++) {
-        ret = gb_timer_list_find_gate(expected_ns, tolerance_ns, &found_expiry, &found_state, &soft_hard_mismatch);
+        ret = gb_timer_list_find_gate(expected_ns, tolerance_ns, &found_soft, &found_expiry, &found_state,
+                                      &soft_hard_mismatch);
         if (ret == 0 || ret == -EACCES || ret == -EPERM)
             break;
         nanosleep(&req, NULL);
@@ -133,6 +141,11 @@ static int gb_timer_list_expect(const char* label,
         printf("%s: timer_list check failed: %s\n", label, strerror(-ret));
         return ret;
     }
+
+    diff = gb_abs_diff_u64(found_expiry, expected_ns);
+    printf("%s: expected=%llu +/- %llu, found=%llu (soft=%llu) diff=%llu state=0x%x\n", label,
+           (unsigned long long)expected_ns, (unsigned long long)tolerance_ns, (unsigned long long)found_expiry,
+           (unsigned long long)found_soft, (unsigned long long)diff, found_state);
 
     if (soft_hard_mismatch) {
         printf("%s: soft/hard expiry mismatch\n", label);
@@ -253,6 +266,8 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
         goto cleanup;
     }
 
+    printf("replace-forward: base_old=%llu base_new=%llu cycle=%llu interval=%u\n", (unsigned long long)base_old,
+           (unsigned long long)base_new, (unsigned long long)shape.cycle_time, entry.interval);
     test_ret = gb_timer_list_expect("replace-forward", base_new, GB_TIMER_LIST_TOL_NS, 0);
     if (test_ret < 0)
         goto cleanup;
@@ -290,6 +305,8 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
         test_ret = -EINVAL;
         goto cleanup;
     }
+    printf("past-base: now=%llu base=%llu cycle=%llu interval=%u\n", (unsigned long long)now_ns,
+           (unsigned long long)base_past, (unsigned long long)shape.cycle_time, entry.interval);
     test_ret = gb_timer_list_expect("past-base", expected_ns, GB_TIMER_LIST_TOL_NS * 2, 0);
     if (test_ret < 0)
         goto cleanup;
@@ -329,6 +346,8 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
         test_ret = -EINVAL;
         goto cleanup;
     }
+    printf("mid-cycle-past: now=%llu base=%llu cycle=%llu interval=%u\n", (unsigned long long)now_ns,
+           (unsigned long long)base_epoch, (unsigned long long)shape.cycle_time, entry.interval);
     test_ret = gb_timer_list_expect("mid-cycle-past", expected_ns, GB_TIMER_LIST_TOL_NS * 2, 0);
     if (test_ret < 0)
         goto cleanup;
@@ -351,6 +370,8 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
             test_ret = ret;
             goto cleanup;
         }
+        printf("near-max-future: base=%llu cycle=%llu interval=%u\n", (unsigned long long)base_max,
+               (unsigned long long)shape.cycle_time, entry.interval);
         test_ret = gb_timer_list_expect("near-max-future", base_max, GB_TIMER_LIST_TOL_NS, (uint64_t)INT64_MAX);
         if (test_ret < 0)
             goto cleanup;
@@ -390,6 +411,8 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
         test_ret = -EINVAL;
         goto cleanup;
     }
+    printf("large-cycle: now=%llu base=%llu cycle=%llu interval=%u\n", (unsigned long long)now_ns,
+           (unsigned long long)base_past, (unsigned long long)large_cycle, entry.interval);
     test_ret = gb_timer_list_expect("large-cycle", expected_ns, GB_TIMER_LIST_TOL_NS, (uint64_t)INT64_MAX);
     if (test_ret < 0)
         goto cleanup;
