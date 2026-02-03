@@ -27,6 +27,7 @@ struct gb_config {
 
     /* Mode flags */
     bool json;               /* Output JSON format */
+    bool verbose;            /* Verbose output */
     bool sample_mode;        /* Sample every N iterations */
     uint32_t sample_every;   /* Sampling interval */
     bool dump_proof;         /* Run dump proof harness */

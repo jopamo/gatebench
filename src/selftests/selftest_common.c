@@ -66,10 +66,19 @@ void gb_selftest_cleanup_gate(struct gb_nl_sock* sock, struct gb_nl_msg* msg, st
     }
 }
 
+static bool gb_selftest_verbose = false;
+
+void gb_selftest_set_verbose(bool verbose) {
+    gb_selftest_verbose = verbose;
+}
+
 void gb_selftest_log(const char* fmt, ...) {
     va_list args;
 
     if (!fmt) {
+        return;
+    }
+    if (!gb_selftest_verbose) {
         return;
     }
 

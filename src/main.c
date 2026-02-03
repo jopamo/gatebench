@@ -135,8 +135,10 @@ int main(int argc, char* argv[]) {
 
     /* Print configuration */
     if (!cfg.json) {
-        gb_config_print(&cfg);
-        print_environment();
+        if (cfg.verbose) {
+            gb_config_print(&cfg);
+            print_environment();
+        }
     }
     else {
         print_json_header(&cfg);
@@ -180,7 +182,10 @@ int main(int argc, char* argv[]) {
 
     /* Run selftests before benchmark */
     if (!cfg.json) {
-        printf("Running selftests...\n");
+        if (cfg.verbose)
+            printf("Running selftests...\n");
+        else
+            printf("Selftests:\n");
     }
 
     ret = gb_selftest_run(&cfg);
@@ -192,9 +197,9 @@ int main(int argc, char* argv[]) {
 
     if (!cfg.json) {
         if (ret == 0)
-            printf("Selftests passed\n\n");
+            printf("Selftests: OK\n\n");
         else
-            printf("Selftests completed with warnings\n\n");
+            printf("Selftests: WARN (soft-failures)\n\n");
     }
 
     if (cfg.dump_proof) {
