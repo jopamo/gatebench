@@ -16,7 +16,7 @@
 #define DEFAULT_ITERS 1000u
 #define DEFAULT_WARMUP 100u
 #define DEFAULT_RUNS 5u
-#define DEFAULT_ENTRIES 100u
+#define DEFAULT_ENTRIES GB_MAX_ENTRIES
 #define DEFAULT_INTERVAL_NS 1000000ull /* 1ms */
 #define DEFAULT_INDEX 1000u
 #define DEFAULT_CPU -1
@@ -36,7 +36,7 @@ static const char* usage_str =
     "  -i, --iters=NUM         Iterations per run (default: 1000)\n"
     "  -w, --warmup=NUM        Warmup iterations (default: 100)\n"
     "  -r, --runs=NUM          Number of runs (default: 5)\n"
-    "  -e, --entries=NUM       Number of gate entries (default: 100)\n"
+    "  -e, --entries=NUM       Number of gate entries (default: 64, max: 64)\n"
     "  -I, --interval-ns=NS    Gate interval in nanoseconds (default: 1000000)\n"
     "  -x, --index=NUM         Starting index for gate actions (default: 1000)\n"
     "\n"
@@ -316,6 +316,11 @@ int gb_cli_parse(int argc, char* argv[], struct gb_config* cfg) {
     if (cfg->entries == 0) {
         fprintf(stderr, "Error: entries must be positive\n");
         return -EINVAL;
+    }
+
+    if (cfg->entries > GB_MAX_ENTRIES) {
+        fprintf(stderr, "Note: entries capped at %u (was %u)\n", GB_MAX_ENTRIES, cfg->entries);
+        cfg->entries = GB_MAX_ENTRIES;
     }
 
     if (cfg->interval_ns == 0) {

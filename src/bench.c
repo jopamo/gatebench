@@ -75,6 +75,7 @@ static int benchmark_single_run(struct gb_nl_sock* sock, const struct gb_config*
     struct gb_nl_msg* resp = NULL;
     struct gate_shape shape;
     struct gate_entry* entries = NULL;
+    uint32_t entry_count;
     struct gb_stats stats;
     size_t create_cap, replace_cap, del_cap;
     uint64_t start_ns, end_ns;
@@ -95,28 +96,32 @@ static int benchmark_single_run(struct gb_nl_sock* sock, const struct gb_config*
         goto out;
     }
 
+    entry_count = cfg->entries;
+    if (entry_count > GB_MAX_ENTRIES)
+        entry_count = GB_MAX_ENTRIES;
+
     memset(&shape, 0, sizeof(shape));
     shape.clockid = cfg->clockid;
     shape.base_time = cfg->base_time;
     shape.cycle_time = cfg->cycle_time;
     shape.cycle_time_ext = cfg->cycle_time_ext;
     shape.interval_ns = cfg->interval_ns;
-    shape.entries = cfg->entries;
+    shape.entries = entry_count;
 
-    if (cfg->entries > 0) {
-        entries = malloc((size_t)cfg->entries * sizeof(*entries));
+    if (entry_count > 0) {
+        entries = malloc((size_t)entry_count * sizeof(*entries));
         if (!entries) {
             ret = -ENOMEM;
             goto out;
         }
 
-        ret = gb_fill_entries(entries, cfg->entries, cfg->interval_ns);
+        ret = gb_fill_entries(entries, entry_count, cfg->interval_ns);
         if (ret < 0)
             goto out;
     }
 
-    create_cap = gate_msg_capacity(cfg->entries, 0);
-    replace_cap = gate_msg_capacity(cfg->entries, 0);
+    create_cap = gate_msg_capacity(entry_count, 0);
+    replace_cap = gate_msg_capacity(entry_count, 0);
     del_cap = 1024;
 
     create_msg = gb_nl_msg_alloc(create_cap);
@@ -127,11 +132,11 @@ static int benchmark_single_run(struct gb_nl_sock* sock, const struct gb_config*
         goto out;
     }
 
-    ret = build_gate_newaction(create_msg, cfg->index, &shape, entries, cfg->entries, NLM_F_CREATE | NLM_F_EXCL, 0, -1);
+    ret = build_gate_newaction(create_msg, cfg->index, &shape, entries, entry_count, NLM_F_CREATE | NLM_F_EXCL, 0, -1);
     if (ret < 0)
         goto out;
 
-    ret = build_gate_newaction(replace_msg, cfg->index, &shape, entries, cfg->entries, NLM_F_CREATE | NLM_F_REPLACE, 0,
+    ret = build_gate_newaction(replace_msg, cfg->index, &shape, entries, entry_count, NLM_F_CREATE | NLM_F_REPLACE, 0,
                                -1);
     if (ret < 0)
         goto out;

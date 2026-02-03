@@ -108,6 +108,7 @@ int gb_proof_run(const struct gb_config* cfg, struct gb_dump_summary* summary) {
     struct gb_dump_stats dump_stats;
     struct gb_pcap_ctx pcap_ctx;
     size_t create_cap;
+    uint32_t entry_count;
     int ret;
 
     if (!cfg || !summary)
@@ -120,14 +121,18 @@ int gb_proof_run(const struct gb_config* cfg, struct gb_dump_summary* summary) {
     if (ret < 0)
         return ret;
 
-    if (cfg->entries > 0) {
-        entries = malloc((size_t)cfg->entries * sizeof(*entries));
+    entry_count = cfg->entries;
+    if (entry_count > GB_MAX_ENTRIES)
+        entry_count = GB_MAX_ENTRIES;
+
+    if (entry_count > 0) {
+        entries = malloc((size_t)entry_count * sizeof(*entries));
         if (!entries) {
             ret = -ENOMEM;
             goto out;
         }
 
-        ret = gb_fill_entries(entries, cfg->entries, cfg->interval_ns);
+        ret = gb_fill_entries(entries, entry_count, cfg->interval_ns);
         if (ret < 0)
             goto out;
     }
@@ -138,9 +143,9 @@ int gb_proof_run(const struct gb_config* cfg, struct gb_dump_summary* summary) {
     shape.cycle_time = cfg->cycle_time;
     shape.cycle_time_ext = cfg->cycle_time_ext;
     shape.interval_ns = cfg->interval_ns;
-    shape.entries = cfg->entries;
+    shape.entries = entry_count;
 
-    create_cap = gate_msg_capacity(cfg->entries, 0);
+    create_cap = gate_msg_capacity(entry_count, 0);
     create_msg = gb_nl_msg_alloc(create_cap);
     del_msg = gb_nl_msg_alloc(1024);
     dump_msg = gb_nl_msg_alloc(1024);
@@ -158,7 +163,7 @@ int gb_proof_run(const struct gb_config* cfg, struct gb_dump_summary* summary) {
         goto out;
 
     gb_nl_msg_reset(create_msg);
-    ret = build_gate_newaction(create_msg, cfg->index, &shape, entries, cfg->entries, NLM_F_CREATE | NLM_F_EXCL, 0, -1);
+    ret = build_gate_newaction(create_msg, cfg->index, &shape, entries, entry_count, NLM_F_CREATE | NLM_F_EXCL, 0, -1);
     if (ret < 0)
         goto out;
 

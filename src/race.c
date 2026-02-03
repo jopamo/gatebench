@@ -9,6 +9,8 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <libmnl/libmnl.h>
+#include <linux/netlink.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdbool.h>
@@ -23,6 +25,27 @@
 #define RACE_SEED_BASE 0x5a17c3d1u
 #define RACE_MIN_PKT 64u
 #define RACE_MAX_PKT 1500u
+#define RACE_ERRNO_MAX 4096u
+#define RACE_EXTACK_MSG_MAX 128u
+#define RACE_EXTACK_SLOTS 6u
+
+#ifndef NLM_F_ACK_TLVS
+#define NLM_F_ACK_TLVS 0x200
+#endif
+
+#ifndef NLMSGERR_ATTR_MSG
+#define NLMSGERR_ATTR_MSG 1
+#endif
+
+struct gb_race_extack_entry {
+    char msg[RACE_EXTACK_MSG_MAX];
+    uint64_t count;
+};
+
+struct gb_race_extack_stats {
+    struct gb_race_extack_entry entries[RACE_EXTACK_SLOTS];
+    uint64_t other;
+};
 
 struct gb_race_nl_ctx {
     const struct gb_config* cfg;
@@ -34,6 +57,8 @@ struct gb_race_nl_ctx {
     int timeout_ms;
     uint64_t ops;
     uint64_t errors;
+    uint64_t err_counts[RACE_ERRNO_MAX];
+    struct gb_race_extack_stats extack;
 };
 
 struct gb_race_dump_ctx {
@@ -43,6 +68,8 @@ struct gb_race_dump_ctx {
     int timeout_ms;
     uint64_t ops;
     uint64_t errors;
+    uint64_t err_counts[RACE_ERRNO_MAX];
+    struct gb_race_extack_stats extack;
 };
 
 struct gb_race_traffic_ctx {
@@ -50,6 +77,7 @@ struct gb_race_traffic_ctx {
     uint32_t seed;
     uint64_t ops;
     uint64_t errors;
+    uint64_t err_counts[RACE_ERRNO_MAX];
 };
 
 static uint32_t rng_next(uint32_t* state) {
@@ -61,6 +89,199 @@ static uint32_t rng_range(uint32_t* state, uint32_t max) {
     if (max == 0)
         return 0;
     return (uint32_t)(((uint64_t)rng_next(state) * (uint64_t)max) >> 32);
+}
+
+static void race_record_err(uint64_t* errors, uint64_t* err_counts, int ret) {
+    uint32_t err;
+
+    if (!errors || !err_counts)
+        return;
+
+    if (ret == 0)
+        return;
+
+    err = (uint32_t)(ret < 0 ? -ret : ret);
+    if (err < RACE_ERRNO_MAX)
+        err_counts[err]++;
+    (*errors)++;
+}
+
+static bool race_parse_extack_msg(const struct gb_nl_msg* resp, char* out, size_t out_len) {
+    const struct nlmsghdr* nlh;
+    const struct nlmsgerr* err;
+    const struct nlattr* attr;
+    size_t payload_len;
+    size_t err_len;
+    int attr_len;
+
+    if (!resp || !resp->buf || !out || out_len == 0)
+        return false;
+
+    nlh = (const struct nlmsghdr*)resp->buf;
+    if (nlh->nlmsg_type != NLMSG_ERROR)
+        return false;
+
+    if (nlh->nlmsg_len < NLMSG_HDRLEN + sizeof(struct nlmsgerr))
+        return false;
+
+    payload_len = nlh->nlmsg_len - NLMSG_HDRLEN;
+    err_len = NLMSG_ALIGN(sizeof(struct nlmsgerr));
+    if (payload_len <= err_len)
+        return false;
+
+    err = (const struct nlmsgerr*)((const char*)nlh + NLMSG_HDRLEN);
+    if (payload_len - err_len > INT_MAX)
+        return false;
+    attr_len = (int)(payload_len - err_len);
+    attr = (const struct nlattr*)((const char*)err + err_len);
+
+    while (mnl_attr_ok(attr, attr_len)) {
+        if (mnl_attr_get_type(attr) == NLMSGERR_ATTR_MSG) {
+            const char* msg = mnl_attr_get_str(attr);
+            if (msg && msg[0] != '\0') {
+                strncpy(out, msg, out_len - 1);
+                out[out_len - 1] = '\0';
+                return true;
+            }
+        }
+        attr_len -= MNL_ALIGN(attr->nla_len);
+        attr = mnl_attr_next(attr);
+    }
+
+    return false;
+}
+
+static void race_record_extack(struct gb_race_extack_stats* stats, const char* msg) {
+    size_t empty = RACE_EXTACK_SLOTS;
+
+    if (!stats || !msg || msg[0] == '\0')
+        return;
+
+    for (size_t i = 0; i < RACE_EXTACK_SLOTS; i++) {
+        if (stats->entries[i].count == 0 && empty == RACE_EXTACK_SLOTS)
+            empty = i;
+        if (stats->entries[i].count > 0 && strcmp(stats->entries[i].msg, msg) == 0) {
+            stats->entries[i].count++;
+            return;
+        }
+    }
+
+    if (empty < RACE_EXTACK_SLOTS) {
+        strncpy(stats->entries[empty].msg, msg, sizeof(stats->entries[empty].msg) - 1);
+        stats->entries[empty].msg[sizeof(stats->entries[empty].msg) - 1] = '\0';
+        stats->entries[empty].count = 1;
+        return;
+    }
+
+    stats->other++;
+}
+
+static void race_record_nl_error(uint64_t* errors,
+                                 uint64_t* err_counts,
+                                 struct gb_race_extack_stats* extack,
+                                 int ret,
+                                 const struct gb_nl_msg* resp) {
+    char msg[RACE_EXTACK_MSG_MAX];
+
+    race_record_err(errors, err_counts, ret);
+    if (ret >= 0 || !extack || !resp)
+        return;
+
+    if (race_parse_extack_msg(resp, msg, sizeof(msg)))
+        race_record_extack(extack, msg);
+}
+
+static void race_print_err_breakdown(const char* label, uint64_t total, const uint64_t* err_counts) {
+    struct race_err_top {
+        uint32_t err;
+        uint64_t count;
+    };
+    struct race_err_top top[5];
+    size_t topn = sizeof(top) / sizeof(top[0]);
+
+    if (!label || !err_counts)
+        return;
+
+    if (total == 0) {
+        printf("  %s error breakdown: none\n", label);
+        return;
+    }
+
+    for (size_t i = 0; i < topn; i++) {
+        top[i].err = 0;
+        top[i].count = 0;
+    }
+
+    for (uint32_t err = 1; err < RACE_ERRNO_MAX; err++) {
+        uint64_t count = err_counts[err];
+        size_t min_idx = 0;
+
+        if (count == 0)
+            continue;
+
+        for (size_t i = 1; i < topn; i++) {
+            if (top[i].count < top[min_idx].count)
+                min_idx = i;
+        }
+
+        if (count > top[min_idx].count) {
+            top[min_idx].err = err;
+            top[min_idx].count = count;
+        }
+    }
+
+    for (size_t i = 0; i < topn; i++) {
+        for (size_t j = i + 1; j < topn; j++) {
+            if (top[j].count > top[i].count) {
+                struct race_err_top tmp = top[i];
+                top[i] = top[j];
+                top[j] = tmp;
+            }
+        }
+    }
+
+    printf("  %s error breakdown:\n", label);
+    for (size_t i = 0; i < topn; i++) {
+        if (top[i].count == 0)
+            break;
+        printf("    %s (%u): %llu\n", strerror((int)top[i].err), top[i].err, (unsigned long long)top[i].count);
+    }
+}
+
+static void race_print_extack(const char* label, const struct gb_race_extack_stats* stats) {
+    struct gb_race_extack_entry sorted[RACE_EXTACK_SLOTS];
+    size_t used = 0;
+
+    if (!label || !stats)
+        return;
+
+    for (size_t i = 0; i < RACE_EXTACK_SLOTS; i++) {
+        if (stats->entries[i].count == 0)
+            continue;
+        sorted[used++] = stats->entries[i];
+    }
+
+    for (size_t i = 0; i < used; i++) {
+        for (size_t j = i + 1; j < used; j++) {
+            if (sorted[j].count > sorted[i].count) {
+                struct gb_race_extack_entry tmp = sorted[i];
+                sorted[i] = sorted[j];
+                sorted[j] = tmp;
+            }
+        }
+    }
+
+    if (used == 0 && stats->other == 0) {
+        printf("  %s extack breakdown: none\n", label);
+        return;
+    }
+
+    printf("  %s extack breakdown:\n", label);
+    for (size_t i = 0; i < used; i++) {
+        printf("    %s: %llu\n", sorted[i].msg, (unsigned long long)sorted[i].count);
+    }
+    if (stats->other > 0)
+        printf("    (other): %llu\n", (unsigned long long)stats->other);
 }
 
 static int32_t race_random_maxoctets(uint32_t* seed) {
@@ -76,7 +297,7 @@ static void race_shape_init(struct gate_shape* shape, const struct gb_config* cf
     shape->cycle_time = cfg->cycle_time;
     shape->cycle_time_ext = cfg->cycle_time_ext;
     shape->interval_ns = cfg->interval_ns;
-    shape->entries = cfg->entries;
+    shape->entries = cfg->entries > GB_MAX_ENTRIES ? GB_MAX_ENTRIES : cfg->entries;
 }
 
 static uint32_t race_fill_entries(struct gate_entry* entries,
@@ -111,13 +332,13 @@ static void* race_replace_thread(void* arg) {
 
     ret = gb_nl_open(&sock);
     if (ret < 0) {
-        ctx->errors++;
+        race_record_err(&ctx->errors, ctx->err_counts, ret);
         return NULL;
     }
 
     entries = calloc(ctx->max_entries, sizeof(*entries));
     if (!entries) {
-        ctx->errors++;
+        race_record_err(&ctx->errors, ctx->err_counts, -ENOMEM);
         gb_nl_close(sock);
         return NULL;
     }
@@ -126,7 +347,7 @@ static void* race_replace_thread(void* arg) {
     req = gb_nl_msg_alloc(cap);
     resp = gb_nl_msg_alloc((size_t)MNL_SOCKET_BUFFER_SIZE);
     if (!req || !resp) {
-        ctx->errors++;
+        race_record_err(&ctx->errors, ctx->err_counts, -ENOMEM);
         goto out;
     }
 
@@ -137,13 +358,12 @@ static void* race_replace_thread(void* arg) {
 
         ret = build_gate_newaction(req, ctx->index, &shape, entries, count, NLM_F_CREATE | NLM_F_REPLACE, 0, -1);
         if (ret < 0) {
-            ctx->errors++;
+            race_record_err(&ctx->errors, ctx->err_counts, ret);
             continue;
         }
-
         ret = gb_nl_send_recv(sock, req, resp, ctx->timeout_ms);
         if (ret < 0 && ret != -EEXIST && ret != -ENOENT)
-            ctx->errors++;
+            race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
 
         ctx->ops++;
         if ((ctx->ops & 0xffu) == 0u)
@@ -169,20 +389,20 @@ static void* race_dump_thread(void* arg) {
 
     ret = gb_nl_open(&sock);
     if (ret < 0) {
-        ctx->errors++;
+        race_record_err(&ctx->errors, ctx->err_counts, ret);
         return NULL;
     }
 
     req = gb_nl_msg_alloc(1024u);
     if (!req) {
-        ctx->errors++;
+        race_record_err(&ctx->errors, ctx->err_counts, -ENOMEM);
         gb_nl_close(sock);
         return NULL;
     }
 
     ret = build_gate_getaction_ex(req, ctx->index, NLM_F_DUMP);
     if (ret < 0) {
-        ctx->errors++;
+        race_record_err(&ctx->errors, ctx->err_counts, ret);
         gb_nl_msg_free(req);
         gb_nl_close(sock);
         return NULL;
@@ -190,8 +410,10 @@ static void* race_dump_thread(void* arg) {
 
     while (!atomic_load_explicit(ctx->stop, memory_order_relaxed)) {
         ret = gb_nl_dump_action(sock, req, &stats, ctx->timeout_ms);
-        if (ret < 0 || stats.saw_error)
-            ctx->errors++;
+        if (ret < 0)
+            race_record_err(&ctx->errors, ctx->err_counts, ret);
+        else if (stats.saw_error)
+            race_record_err(&ctx->errors, ctx->err_counts, stats.error_code);
 
         ctx->ops++;
         if ((ctx->ops & 0xffu) == 0u)
@@ -216,13 +438,13 @@ static void* race_delete_thread(void* arg) {
 
     ret = gb_nl_open(&sock);
     if (ret < 0) {
-        ctx->errors++;
+        race_record_err(&ctx->errors, ctx->err_counts, ret);
         return NULL;
     }
 
     entries = calloc(ctx->max_entries, sizeof(*entries));
     if (!entries) {
-        ctx->errors++;
+        race_record_err(&ctx->errors, ctx->err_counts, -ENOMEM);
         gb_nl_close(sock);
         return NULL;
     }
@@ -232,22 +454,21 @@ static void* race_delete_thread(void* arg) {
     create_msg = gb_nl_msg_alloc(create_cap);
     resp = gb_nl_msg_alloc((size_t)MNL_SOCKET_BUFFER_SIZE);
     if (!del_msg || !create_msg || !resp) {
-        ctx->errors++;
+        race_record_err(&ctx->errors, ctx->err_counts, -ENOMEM);
         goto out;
     }
 
     ret = build_gate_delaction(del_msg, ctx->index);
     if (ret < 0) {
-        ctx->errors++;
+        race_record_err(&ctx->errors, ctx->err_counts, ret);
         goto out;
     }
-
     race_shape_init(&shape, ctx->cfg);
 
     while (!atomic_load_explicit(ctx->stop, memory_order_relaxed)) {
         ret = gb_nl_send_recv(sock, del_msg, resp, ctx->timeout_ms);
         if (ret < 0 && ret != -ENOENT)
-            ctx->errors++;
+            race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
 
         {
             uint32_t count = race_fill_entries(entries, ctx->max_entries, ctx->interval_max, &ctx->seed);
@@ -255,13 +476,12 @@ static void* race_delete_thread(void* arg) {
                 build_gate_newaction(create_msg, ctx->index, &shape, entries, count, NLM_F_CREATE | NLM_F_EXCL, 0, -1);
         }
         if (ret < 0) {
-            ctx->errors++;
+            race_record_err(&ctx->errors, ctx->err_counts, ret);
             continue;
         }
-
         ret = gb_nl_send_recv(sock, create_msg, resp, ctx->timeout_ms);
         if (ret < 0 && ret != -EEXIST)
-            ctx->errors++;
+            race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
 
         ctx->ops++;
         usleep(100);
@@ -289,7 +509,7 @@ static void* race_traffic_thread(void* arg) {
 
     fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) {
-        ctx->errors++;
+        race_record_err(&ctx->errors, ctx->err_counts, -errno);
         return NULL;
     }
 
@@ -310,8 +530,10 @@ static void* race_traffic_thread(void* arg) {
         uint32_t len = RACE_MIN_PKT + rng_range(&ctx->seed, span);
 
         ret = sendto(fd, payload, len, 0, (struct sockaddr*)&addr, sizeof(addr));
-        if (ret < 0)
-            ctx->errors++;
+        if (ret < 0) {
+            int err = errno;
+            race_record_err(&ctx->errors, ctx->err_counts, -err);
+        }
         else
             ctx->ops++;
 
@@ -347,6 +569,8 @@ int gb_race_run(const struct gb_config* cfg) {
         return -EINVAL;
 
     max_entries = cfg->entries == 0 ? 1u : cfg->entries;
+    if (max_entries > GB_MAX_ENTRIES)
+        max_entries = GB_MAX_ENTRIES;
     if (cfg->interval_ns == 0 || cfg->interval_ns > UINT32_MAX)
         base_interval = 1000000u;
     else
@@ -447,6 +671,13 @@ out_stop:
                (unsigned long long)traffic_ctx.errors);
         printf("  Delete ops:  %llu, errors: %llu\n", (unsigned long long)delete_ctx.ops,
                (unsigned long long)delete_ctx.errors);
+        race_print_err_breakdown("Replace", replace_ctx.errors, replace_ctx.err_counts);
+        race_print_err_breakdown("Dump", dump_ctx.errors, dump_ctx.err_counts);
+        race_print_err_breakdown("Traffic", traffic_ctx.errors, traffic_ctx.err_counts);
+        race_print_err_breakdown("Delete", delete_ctx.errors, delete_ctx.err_counts);
+        race_print_extack("Replace", &replace_ctx.extack);
+        race_print_extack("Dump", &dump_ctx.extack);
+        race_print_extack("Delete", &delete_ctx.extack);
     }
 
     if (ret != 0)
