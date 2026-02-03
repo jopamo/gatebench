@@ -13,13 +13,11 @@
 #define GB_TIMER_LIST_TOL_NS 100000000ull
 #define GB_TIMER_LIST_RETRIES 5
 #define GB_TIMER_LIST_RETRY_NS 20000000ull
-#define GB_TIMER_LIST_BASELINE_ENTRIES 4
+#define GB_TIMER_LIST_BASELINE_ENTRIES 64
+#define GB_TIMER_LIST_BASELINE_PATTERN_LEN 8
 
-static const uint32_t gb_baseline_intervals[GB_TIMER_LIST_BASELINE_ENTRIES] = {
-    250000,
-    500000,
-    750000,
-    1000000,
+static const uint32_t gb_baseline_intervals[GB_TIMER_LIST_BASELINE_PATTERN_LEN] = {
+    250000, 500000, 750000, 1000000, 1250000, 1500000, 1750000, 2000000,
 };
 
 static int gb_clock_gettime_ns(clockid_t clkid, uint64_t* out_ns) {
@@ -46,7 +44,7 @@ static uint64_t gb_fill_baseline_entries(struct gate_entry* entries, uint32_t co
         return 0;
 
     for (uint32_t i = 0; i < count; i++) {
-        uint32_t interval = gb_baseline_intervals[i % GB_TIMER_LIST_BASELINE_ENTRIES];
+        uint32_t interval = gb_baseline_intervals[i % GB_TIMER_LIST_BASELINE_PATTERN_LEN];
 
         entries[i].index = i;
         entries[i].gate_state = (i % 2) == 0;
@@ -278,9 +276,11 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
         goto out;
     }
 
-    printf("baseline-schedule: now=%llu base=%llu cycle=%llu intervals=%u,%u,%u,%u\n", (unsigned long long)now_ns,
-           (unsigned long long)shape.base_time, (unsigned long long)shape.cycle_time, gb_baseline_intervals[0],
-           gb_baseline_intervals[1], gb_baseline_intervals[2], gb_baseline_intervals[3]);
+    printf("baseline-schedule: now=%llu base=%llu cycle=%llu entries=%u pattern=%u,%u,%u,%u,%u,%u,%u,%u\n",
+           (unsigned long long)now_ns, (unsigned long long)shape.base_time, (unsigned long long)shape.cycle_time,
+           GB_TIMER_LIST_BASELINE_ENTRIES, gb_baseline_intervals[0], gb_baseline_intervals[1], gb_baseline_intervals[2],
+           gb_baseline_intervals[3], gb_baseline_intervals[4], gb_baseline_intervals[5], gb_baseline_intervals[6],
+           gb_baseline_intervals[7]);
     test_ret = gb_timer_list_expect("baseline-schedule", shape.base_time, GB_TIMER_LIST_TOL_NS, 0);
     if (test_ret < 0)
         goto cleanup;
