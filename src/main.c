@@ -1,6 +1,7 @@
 /* src/main.c
  * Main entry point and orchestration of the benchmark tool.
  */
+
 #include "../include/gatebench.h"
 #include "../include/gatebench_cli.h"
 #include "../include/gatebench_nl.h"
@@ -24,10 +25,19 @@ static void print_environment(void) {
     struct utsname uts;
     int cpu;
     int ret;
+    int uname_ret;
 
-    if (uname(&uts) == 0) {
-        printf("Environment:\n");
+    printf("Environment:\n");
+
+    uname_ret = uname(&uts);
+    if (uname_ret == 0) {
         printf("  Kernel: %s %s %s\n", uts.sysname, uts.release, uts.machine);
+    }
+    else {
+        int err = errno;
+
+        fprintf(stderr, "Failed to uname: %s (%d)\n", strerror(err), err);
+        printf("  Kernel: unknown\n");
     }
 
     /* Try to get current CPU */
@@ -47,17 +57,29 @@ static void print_json_header(const struct gb_config* cfg) {
     struct utsname uts;
     int cpu;
     int ret;
+    int uname_ret;
 
     printf("{\n");
     printf("  \"version\": \"0.1.0\",\n");
 
-    if (uname(&uts) == 0) {
-        printf("  \"environment\": {\n");
+    uname_ret = uname(&uts);
+    if (uname_ret < 0) {
+        int err = errno;
+
+        fprintf(stderr, "Failed to uname: %s (%d)\n", strerror(err), err);
+    }
+    printf("  \"environment\": {\n");
+    if (uname_ret == 0) {
         printf("    \"sysname\": \"%s\",\n", uts.sysname);
         printf("    \"release\": \"%s\",\n", uts.release);
         printf("    \"machine\": \"%s\"\n", uts.machine);
-        printf("  },\n");
     }
+    else {
+        printf("    \"sysname\": null,\n");
+        printf("    \"release\": null,\n");
+        printf("    \"machine\": null\n");
+    }
+    printf("  },\n");
 
     ret = gb_util_get_cpu(&cpu);
     if (ret < 0) {
@@ -144,7 +166,7 @@ int main(int argc, char* argv[]) {
 
     ret = gb_selftest_run(&cfg);
     if (ret < 0) {
-        fprintf(stderr, "Selftests failed\n");
+        fprintf(stderr, "Selftests failed: %s (%d)\n", strerror(-ret), ret);
         gb_nl_close(sock);
         return EXIT_FAILURE;
     }
@@ -164,6 +186,9 @@ int main(int argc, char* argv[]) {
         }
 
         ret = gb_proof_run(&cfg, &dump_summary);
+        if (ret < 0) {
+            fprintf(stderr, "Dump proof failed: %s (%d)\n", strerror(-ret), ret);
+        }
         if (!cfg.json) {
             gb_proof_print_summary(&dump_summary, &cfg);
             printf("\n");
@@ -184,7 +209,7 @@ int main(int argc, char* argv[]) {
     memset(&summary, 0, sizeof(summary));
     ret = gb_bench_run(&cfg, &summary);
     if (ret < 0) {
-        fprintf(stderr, "Benchmark failed: %s\n", strerror(-ret));
+        fprintf(stderr, "Benchmark run failed: %s (%d)\n", strerror(-ret), ret);
         gb_nl_close(sock);
         gb_summary_free(&summary);
         return EXIT_FAILURE;
