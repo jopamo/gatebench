@@ -23,11 +23,13 @@ gatebench_sources = files(
   'selftests/test_clockid_variants.c',
   'selftests/test_cycle_time_derivation.c',
   'selftests/test_cycle_time_ext_parsing.c',
+  'selftests/test_cycle_time_supplied.c',
   'selftests/test_replace_preserve_schedule.c',
   'selftests/test_replace_append_entries.c',
   'selftests/test_base_time_update.c',
   'selftests/test_timer_list_expiry.c',
   'selftests/test_multiple_entries.c',
+  'selftests/test_entry_corner_cases.c',
   'selftests/test_malformed_nesting.c',
   'selftests/test_invalid_action_control.c',
   'selftests/test_invalid_entry_attrs.c',
@@ -35,6 +37,8 @@ gatebench_sources = files(
   'selftests/test_param_validation.c',
   'selftests/test_replace_invalid.c',
   'selftests/test_large_dump.c',
+  'selftests/test_entry_defaults.c',
+  'selftests/test_priority_flags.c',
 )
 
 # Headers (for dependency tracking)
