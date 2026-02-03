@@ -5,6 +5,7 @@ gatebench_sources = files(
   'bench.c',
   'selftest.c',
   'proof.c',
+  'race.c',
   'nl.c',
   'gate_msg.c',
   'stats.c',
@@ -52,6 +53,7 @@ gatebench_headers = files(
   '../include/gatebench_bench.h',
   '../include/gatebench_selftest.h',
   '../include/gatebench_proof.h',
+  '../include/gatebench_race.h',
 )
 
 # Build targets
