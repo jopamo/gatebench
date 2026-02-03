@@ -1,3 +1,6 @@
+/* include/gatebench_proof.h
+ * Public API for proof verification.
+ */
 #ifndef GATEBENCH_PROOF_H
 #define GATEBENCH_PROOF_H
 

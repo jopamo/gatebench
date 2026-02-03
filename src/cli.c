@@ -1,3 +1,6 @@
+/* src/cli.c
+ * Command-line argument parsing and configuration handling.
+ */
 #include "../include/gatebench.h"
 #include "../include/gatebench_cli.h"
 

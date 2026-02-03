@@ -1,3 +1,6 @@
+/* include/gatebench_stats.h
+ * Public API for statistics.
+ */
 #ifndef GATEBENCH_STATS_H
 #define GATEBENCH_STATS_H
 

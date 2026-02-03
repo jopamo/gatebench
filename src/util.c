@@ -1,3 +1,6 @@
+/* src/util.c
+ * Utility functions for time, CPU pinning, etc.
+ */
 #include "../include/gatebench.h"
 #include "../include/gatebench_util.h"
 

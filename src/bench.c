@@ -1,3 +1,6 @@
+/* src/bench.c
+ * Core benchmarking logic and measurement loop.
+ */
 #include "../include/gatebench.h"
 #include "../include/gatebench_bench.h"
 #include "../include/gatebench_gate.h"

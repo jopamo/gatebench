@@ -1,3 +1,6 @@
+/* include/gatebench.h
+ * Main public header with core types and configuration.
+ */
 #ifndef GATEBENCH_H
 #define GATEBENCH_H
 

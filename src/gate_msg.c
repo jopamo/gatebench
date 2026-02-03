@@ -1,3 +1,6 @@
+/* src/gate_msg.c
+ * Netlink message construction for tc-gate.
+ */
 #include "../include/gatebench.h"
 #include "../include/gatebench_gate.h"
 #include "../include/gatebench_nl.h"

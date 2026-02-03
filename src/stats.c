@@ -1,3 +1,6 @@
+/* src/stats.c
+ * Statistical analysis of benchmark results.
+ */
 #include "../include/gatebench_stats.h"
 
 #include <errno.h>
