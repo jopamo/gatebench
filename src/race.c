@@ -30,7 +30,7 @@
 #define RACE_ERRNO_MAX 4096u
 #define RACE_EXTACK_MSG_MAX 128u
 #define RACE_EXTACK_SLOTS 6u
-#define RACE_INVALID_CASES 7u
+#define RACE_INVALID_CASES 8u
 #define RACE_THREAD_COUNT 5u
 
 #ifndef NLM_F_ACK_TLVS
@@ -564,6 +564,48 @@ static int race_send_invalid_entry_attr(struct gb_nl_sock* sock,
     return gb_nl_send_recv(sock, msg, resp, timeout_ms);
 }
 
+static int race_send_bad_interval(struct gb_nl_sock* sock,
+                                  struct gb_nl_msg* msg,
+                                  struct gb_nl_msg* resp,
+                                  uint32_t index,
+                                  int timeout_ms) {
+    struct gate_shape shape;
+    struct gate_entry entry;
+    int ret;
+
+    memset(&shape, 0, sizeof(shape));
+    shape.clockid = CLOCK_TAI;
+    shape.base_time = 0;
+    shape.cycle_time = RACE_INVALID_INTERVAL_NS;
+    shape.cycle_time_ext = 0;
+    shape.interval_ns = RACE_INVALID_INTERVAL_NS;
+    shape.entries = 1;
+
+    memset(&entry, 0, sizeof(entry));
+    entry.index = 0;
+    entry.gate_state = true;
+    entry.interval = RACE_INVALID_INTERVAL_NS;
+    entry.ipv = -1;
+    entry.maxoctets = -1;
+
+    gb_nl_msg_reset(msg);
+    ret = build_gate_newaction(msg, index, &shape, &entry, 1, NLM_F_CREATE | NLM_F_EXCL, 0, -1);
+    if (ret < 0)
+        return ret;
+
+    ret = gb_nl_send_recv(sock, msg, resp, timeout_ms);
+    if (ret < 0 && ret != -EEXIST)
+        return ret;
+
+    entry.interval = 0; /* invalid interval on replace */
+    gb_nl_msg_reset(msg);
+    ret = build_gate_newaction(msg, index, &shape, &entry, 1, NLM_F_REPLACE, 0, -1);
+    if (ret < 0)
+        return ret;
+
+    return gb_nl_send_recv(sock, msg, resp, timeout_ms);
+}
+
 static uint32_t race_fill_entries(struct gate_entry* entries,
                                   uint32_t max_entries,
                                   uint32_t interval_max,
@@ -867,18 +909,20 @@ static void* race_invalid_thread(void* arg) {
             case 5:
                 ret = race_send_invalid_entry_attr(sock, msg, resp, index, 1, ctx->timeout_ms);
                 break;
-            default:
+            case 6:
                 ret = race_send_invalid_entry_attr(sock, msg, resp, index, 2, ctx->timeout_ms);
+                break;
+            default:
+                ret = race_send_bad_interval(sock, msg, resp, index, ctx->timeout_ms);
                 break;
         }
 
         if (ret < 0)
             race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
-        else {
-            gb_nl_msg_reset(del_msg);
-            if (build_gate_delaction(del_msg, index) >= 0)
-                (void)gb_nl_send_recv(sock, del_msg, resp, ctx->timeout_ms);
-        }
+
+        gb_nl_msg_reset(del_msg);
+        if (build_gate_delaction(del_msg, index) >= 0)
+            (void)gb_nl_send_recv(sock, del_msg, resp, ctx->timeout_ms);
 
         ctx->ops++;
         if ((ctx->ops & 0xffu) == 0u)

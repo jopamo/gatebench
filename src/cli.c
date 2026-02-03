@@ -58,6 +58,7 @@ static const char* usage_str =
     "  --nlmon-iface=NAME      nlmon interface for capture (default: nlmon0)\n"
     "  --race                  Run race workload mode (default: off; includes invalid input thread)\n"
     "  --seconds=NUM           Race mode duration in seconds (default: 60)\n"
+    "  --verbose               Show configuration, environment, and selftest details\n"
     "\n"
     "Other options:\n"
     "  -h, --help              Show this help message\n"
@@ -82,6 +83,7 @@ static const struct option long_options[] = {
     {"nlmon-iface", required_argument, NULL, 263},
     {"race", no_argument, NULL, 264},
     {"seconds", required_argument, NULL, 265},
+    {"verbose", no_argument, NULL, 266},
     {"json", no_argument, NULL, 'j'},
     {"help", no_argument, NULL, 'h'},
     {"version", no_argument, NULL, 'v'},
@@ -162,6 +164,7 @@ void gb_config_init(struct gb_config* cfg) {
     cfg->cpu = DEFAULT_CPU;
     cfg->timeout_ms = DEFAULT_TIMEOUT_MS;
     cfg->json = false;
+    cfg->verbose = false;
     cfg->sample_mode = false;
     cfg->sample_every = 0;
     cfg->dump_proof = false;
@@ -293,6 +296,9 @@ int gb_cli_parse(int argc, char* argv[], struct gb_config* cfg) {
                     fprintf(stderr, "Error: seconds must be positive\n");
                     return -EINVAL;
                 }
+                break;
+            case 266:
+                cfg->verbose = true;
                 break;
             case 'h':
                 print_usage();

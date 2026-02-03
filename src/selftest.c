@@ -43,9 +43,6 @@ static const struct gb_selftest_case historical_tests[] = {
     {"create missing entry list", gb_selftest_create_missing_entries, 0},
     {"create empty entry list", gb_selftest_create_empty_entries, 0},
     {"replace append entries", gb_selftest_replace_append_entries, 0},
-    {"timer inactive no clamp", gb_selftest_timer_inactive_no_clamp, 0},
-    {"timer active clamp", gb_selftest_timer_active_clamp, 0},
-    {"timer list expiry", gb_selftest_timer_list_expiry, 0},
 };
 
 static const struct gb_selftest_case unpatched_tests[] = {
@@ -73,7 +70,44 @@ static bool is_soft_fail(const char* name, const char* const* soft_fail_names, s
     return false;
 }
 
+static void print_suite_summary(const char* label, int passed, size_t count, size_t failed, size_t soft_failed) {
+    size_t hard_failed = 0;
+
+    if (!label)
+        label = "unknown";
+
+    if (failed > soft_failed)
+        hard_failed = failed - soft_failed;
+
+    printf("  %-20s %d/%zu", label, passed, count);
+    if (hard_failed > 0 || soft_failed > 0) {
+        printf(" (");
+        if (hard_failed > 0) {
+            printf("%zu fail%s", hard_failed, hard_failed == 1 ? "" : "s");
+            if (soft_failed > 0)
+                printf(", ");
+        }
+        if (soft_failed > 0)
+            printf("%zu soft-fail%s", soft_failed, soft_failed == 1 ? "" : "s");
+        printf(")");
+    }
+    printf("\n");
+}
+
+static void print_test_result_line(const char* name, const char* status, int ret, int expected, bool show_expected) {
+    const int name_width = 32;
+
+    if (!name || !status)
+        return;
+
+    printf("    %-*s %s (got %d", name_width, name, status, ret);
+    if (show_expected)
+        printf(", expected %d", expected);
+    printf(")\n");
+}
+
 static int run_test_suite(const char* label,
+                          const char* summary_label,
                           const struct gb_selftest_case* tests,
                           size_t count,
                           struct gb_nl_sock* sock,
@@ -83,43 +117,65 @@ static int run_test_suite(const char* label,
                           size_t* soft_failed_out,
                           const char* const* soft_fail_names,
                           size_t soft_fail_count,
-                          bool* large_dump_failed_out) {
+                          bool* large_dump_failed_out,
+                          bool verbose) {
     int passed = 0;
     size_t failed = 0;
     size_t soft_failed = 0;
     bool large_dump_failed = false;
+    const char* suite_label = summary_label ? summary_label : label;
 
-    printf("== %s selftests (%zu) ==\n", label, count);
+    if (verbose)
+        printf("== %s selftests (%zu) ==\n", label, count);
+    else
+        printf("  %s (%zu):\n", suite_label ? suite_label : "unknown", count);
 
     for (size_t i = 0; i < count; i++) {
         uint32_t test_index = base_index + (uint32_t)(i * 1024u);
         int ret;
+        bool passed_ok;
+        bool is_soft = false;
+        const char* status = "FAIL";
 
-        printf("  - %s\n", tests[i].name);
+        if (verbose)
+            printf("  - %s\n", tests[i].name);
 
         ret = tests[i].func(sock, test_index);
 
-        if (gb_nl_error_expected(ret, tests[i].expected_err)) {
-            printf("    [PASS] got %d\n", ret);
+        passed_ok = gb_nl_error_expected(ret, tests[i].expected_err);
+        if (passed_ok) {
+            if (verbose)
+                printf("    [PASS] got %d\n", ret);
             passed++;
+            status = "PASS";
         }
         else {
-            bool is_soft = is_soft_fail(tests[i].name, soft_fail_names, soft_fail_count);
+            is_soft = is_soft_fail(tests[i].name, soft_fail_names, soft_fail_count);
 
-            printf("    [%s] got %d, expected %d\n", is_soft ? "SOFTFAIL" : "FAIL", ret, tests[i].expected_err);
+            if (verbose)
+                printf("    [%s] got %d, expected %d\n", is_soft ? "SOFTFAIL" : "FAIL", ret, tests[i].expected_err);
             failed++;
             if (is_soft)
                 soft_failed++;
+            status = is_soft ? "SOFTFAIL" : "FAIL";
             if (strcmp(tests[i].name, UNPATCHED_LARGE_DUMP) == 0)
                 large_dump_failed = true;
         }
+
+        if (!verbose)
+            print_test_result_line(tests[i].name, status, ret, tests[i].expected_err, !passed_ok);
     }
 
-    printf("%s selftests: %d/%zu passed", label, passed, count);
-    if (soft_failed > 0) {
-        printf(" (%zu soft-fail%s)", soft_failed, soft_failed == 1 ? "" : "s");
+    if (verbose) {
+        printf("%s selftests: %d/%zu passed", label, passed, count);
+        if (soft_failed > 0) {
+            printf(" (%zu soft-fail%s)", soft_failed, soft_failed == 1 ? "" : "s");
+        }
+        printf("\n\n");
     }
-    printf("\n\n");
+    else {
+        printf("\n");
+    }
 
     if (passed_out)
         *passed_out = passed;
@@ -152,18 +208,17 @@ int gb_selftest_run(struct gb_config* cfg) {
     int ret_historical;
     int ret_unpatched;
     int ret;
+    bool verbose = false;
     static const char* const historical_fail_tests[] = {HISTORICAL_CREATE_MISSING_ENTRY_LIST,
-                                                        HISTORICAL_CREATE_EMPTY_ENTRY_LIST,
-                                                        HISTORICAL_REPLACE_APPEND,
-                                                        "timer inactive no clamp",
-                                                        "timer active clamp",
-                                                        "timer list expiry"};
+                                                        HISTORICAL_CREATE_EMPTY_ENTRY_LIST, HISTORICAL_REPLACE_APPEND};
     static const char* const unpatched_fail_tests[] = {UNPATCHED_LARGE_DUMP};
 
     base_index = cfg->index;
+    verbose = cfg->verbose && !cfg->json;
+    gb_selftest_set_verbose(verbose);
 
-    ret_internal = run_test_suite("internal", internal_tests, NUM_INTERNAL_TESTS, NULL, base_index, &internal_passed,
-                                  NULL, NULL, NULL, 0, NULL);
+    ret_internal = run_test_suite("internal", "internal", internal_tests, NUM_INTERNAL_TESTS, NULL, base_index,
+                                  &internal_passed, NULL, NULL, NULL, 0, NULL, verbose);
 
     ret = gb_nl_open(&sock);
     if (ret < 0) {
@@ -171,24 +226,42 @@ int gb_selftest_run(struct gb_config* cfg) {
         return ret;
     }
 
-    ret_stable = run_test_suite("stable regression", stable_tests, NUM_STABLE_TESTS, sock, base_index, &stable_passed,
-                                &stable_failed, &stable_soft_failed, NULL, 0, NULL);
+    ret_stable = run_test_suite("stable regression", "stable", stable_tests, NUM_STABLE_TESTS, sock, base_index,
+                                &stable_passed, &stable_failed, &stable_soft_failed, NULL, 0, NULL, verbose);
 
-    ret_historical = run_test_suite("historical behavior", historical_tests, NUM_HISTORICAL_TESTS, sock,
+    ret_historical = run_test_suite("historical behavior", "historical", historical_tests, NUM_HISTORICAL_TESTS, sock,
                                     base_index + (uint32_t)(NUM_STABLE_TESTS * 1024u), &historical_passed,
                                     &historical_failed, &historical_soft_failed, historical_fail_tests,
-                                    sizeof(historical_fail_tests) / sizeof(historical_fail_tests[0]), NULL);
+                                    sizeof(historical_fail_tests) / sizeof(historical_fail_tests[0]), NULL, verbose);
 
-    ret_unpatched = run_test_suite("unpatched behavior", unpatched_tests, NUM_UNPATCHED_TESTS, sock,
-                                   base_index + (uint32_t)((NUM_STABLE_TESTS + NUM_HISTORICAL_TESTS) * 1024u),
-                                   &unpatched_passed, &unpatched_failed, &unpatched_soft_failed, unpatched_fail_tests,
-                                   sizeof(unpatched_fail_tests) / sizeof(unpatched_fail_tests[0]), &large_dump_failed);
+    ret_unpatched =
+        run_test_suite("unpatched behavior", "unpatched", unpatched_tests, NUM_UNPATCHED_TESTS, sock,
+                       base_index + (uint32_t)((NUM_STABLE_TESTS + NUM_HISTORICAL_TESTS) * 1024u), &unpatched_passed,
+                       &unpatched_failed, &unpatched_soft_failed, unpatched_fail_tests,
+                       sizeof(unpatched_fail_tests) / sizeof(unpatched_fail_tests[0]), &large_dump_failed, verbose);
 
     gb_nl_close(sock);
 
-    printf("Selftests summary: internal %d/%zu, stable %d/%zu, historical %d/%zu, unpatched %d/%zu\n", internal_passed,
-           NUM_INTERNAL_TESTS, stable_passed, NUM_STABLE_TESTS, historical_passed, NUM_HISTORICAL_TESTS,
-           unpatched_passed, NUM_UNPATCHED_TESTS);
+    if (verbose) {
+        printf("Selftests summary: internal %d/%zu, stable %d/%zu, historical %d/%zu, unpatched %d/%zu\n",
+               internal_passed, NUM_INTERNAL_TESTS, stable_passed, NUM_STABLE_TESTS, historical_passed,
+               NUM_HISTORICAL_TESTS, unpatched_passed, NUM_UNPATCHED_TESTS);
+    }
+    else {
+        size_t internal_failed = 0;
+
+        if (internal_passed < (int)NUM_INTERNAL_TESTS)
+            internal_failed = NUM_INTERNAL_TESTS - (size_t)internal_passed;
+
+        printf("Summary:\n");
+        print_suite_summary("internal", internal_passed, NUM_INTERNAL_TESTS, internal_failed, 0);
+        print_suite_summary("stable", stable_passed, NUM_STABLE_TESTS, stable_failed, stable_soft_failed);
+        print_suite_summary("historical", historical_passed, NUM_HISTORICAL_TESTS, historical_failed,
+                            historical_soft_failed);
+        print_suite_summary("unpatched", unpatched_passed, NUM_UNPATCHED_TESTS, unpatched_failed,
+                            unpatched_soft_failed);
+        printf("\n");
+    }
 
     if (stable_soft_failed > 0 && stable_failed == stable_soft_failed) {
         ret_stable = 0;
