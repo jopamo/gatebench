@@ -18,6 +18,7 @@ int gb_selftest_cycle_time_derivation(struct gb_nl_sock* sock, uint32_t base_ind
 int gb_selftest_cycle_time_ext_parsing(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_replace_preserve_schedule(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_base_time_update(struct gb_nl_sock* sock, uint32_t base_index);
+int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_multiple_entries(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_malformed_nesting(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_replace_append_entries(struct gb_nl_sock* sock, uint32_t base_index);

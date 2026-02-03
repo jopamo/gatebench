@@ -26,6 +26,7 @@ static const struct gb_selftest_case stable_tests[] = {
     {"replace preserve schedule", gb_selftest_replace_preserve_schedule, 0},
     {"replace append entries", gb_selftest_replace_append_entries, 0},
     {"base time update", gb_selftest_base_time_update, 0},
+    {"timer list expiry", gb_selftest_timer_list_expiry, 0},
     {"replace persistence", gb_selftest_replace_persistence, 0},
     {"clockid variants", gb_selftest_clockid_variants, 0},
     {"cycle time derivation", gb_selftest_cycle_time_derivation, 0},

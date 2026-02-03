@@ -56,7 +56,7 @@ sudo meson install -C build
 
 ## License
 
-MIT
+GPL-2
 
 ## Acknowledgments
 
