@@ -13,6 +13,14 @@
 #define GB_TIMER_LIST_TOL_NS 100000000ull
 #define GB_TIMER_LIST_RETRIES 5
 #define GB_TIMER_LIST_RETRY_NS 20000000ull
+#define GB_TIMER_LIST_BASELINE_ENTRIES 4
+
+static const uint32_t gb_baseline_intervals[GB_TIMER_LIST_BASELINE_ENTRIES] = {
+    250000,
+    500000,
+    750000,
+    1000000,
+};
 
 static int gb_clock_gettime_ns(clockid_t clkid, uint64_t* out_ns) {
     struct timespec ts;
@@ -29,6 +37,26 @@ static int gb_clock_gettime_ns(clockid_t clkid, uint64_t* out_ns) {
 
 static uint64_t gb_abs_diff_u64(uint64_t a, uint64_t b) {
     return a > b ? (a - b) : (b - a);
+}
+
+static uint64_t gb_fill_baseline_entries(struct gate_entry* entries, uint32_t count) {
+    uint64_t cycle = 0;
+
+    if (!entries || count == 0)
+        return 0;
+
+    for (uint32_t i = 0; i < count; i++) {
+        uint32_t interval = gb_baseline_intervals[i % GB_TIMER_LIST_BASELINE_ENTRIES];
+
+        entries[i].index = i;
+        entries[i].gate_state = (i % 2) == 0;
+        entries[i].interval = interval;
+        entries[i].ipv = -1;
+        entries[i].maxoctets = -1;
+        cycle += interval;
+    }
+
+    return cycle;
 }
 
 static int gb_timer_list_find_gate(uint64_t expected_ns,
@@ -197,6 +225,7 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
     struct gb_nl_msg* resp = NULL;
     struct gate_shape shape;
     struct gate_entry entry;
+    struct gate_entry baseline_entries[GB_TIMER_LIST_BASELINE_ENTRIES];
     uint64_t now_ns = 0;
     uint64_t base_old;
     uint64_t base_new;
@@ -205,6 +234,7 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
     uint64_t base_past = 0;
     uint64_t base_max = 0;
     uint64_t large_cycle = 0;
+    uint64_t baseline_cycle = 0;
     clockid_t clkid = CLOCK_TAI;
     int ret;
     int test_ret = 0;
@@ -214,6 +244,7 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
 
     gb_selftest_shape_default(&shape, 1);
     gb_selftest_entry_default(&entry);
+    baseline_cycle = gb_fill_baseline_entries(baseline_entries, GB_TIMER_LIST_BASELINE_ENTRIES);
 
     ret = gb_clock_gettime_ns(CLOCK_TAI, &now_ns);
     if (ret < 0) {
@@ -224,23 +255,18 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
     }
 
     shape.clockid = (uint32_t)clkid;
-    shape.interval_ns = GB_TIMER_LIST_INTERVAL_NS;
-    shape.cycle_time = GB_TIMER_LIST_INTERVAL_NS;
+    shape.interval_ns = gb_baseline_intervals[0];
+    shape.cycle_time = baseline_cycle;
     shape.cycle_time_ext = 0;
-    shape.entries = 1;
+    shape.entries = GB_TIMER_LIST_BASELINE_ENTRIES;
+    shape.base_time = now_ns + baseline_cycle;
 
-    entry.interval = (uint32_t)GB_TIMER_LIST_INTERVAL_NS;
-
-    base_old = now_ns + GB_TIMER_LIST_OLD_DELTA_NS;
-    base_new = now_ns + GB_TIMER_LIST_NEW_DELTA_NS;
-
-    shape.base_time = base_old;
-
-    ret = gb_selftest_alloc_msgs(&msg, &resp, gate_msg_capacity(1, 0));
+    ret = gb_selftest_alloc_msgs(&msg, &resp, gate_msg_capacity(GB_TIMER_LIST_BASELINE_ENTRIES, 0));
     if (ret < 0)
         return ret;
 
-    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, NLM_F_CREATE | NLM_F_EXCL, 0, -1);
+    ret = build_gate_newaction(msg, base_index, &shape, baseline_entries, GB_TIMER_LIST_BASELINE_ENTRIES,
+                               NLM_F_CREATE | NLM_F_EXCL, 0, -1);
     if (ret < 0) {
         test_ret = ret;
         goto out;
@@ -251,6 +277,48 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
         test_ret = ret;
         goto out;
     }
+
+    printf("baseline-schedule: now=%llu base=%llu cycle=%llu intervals=%u,%u,%u,%u\n", (unsigned long long)now_ns,
+           (unsigned long long)shape.base_time, (unsigned long long)shape.cycle_time, gb_baseline_intervals[0],
+           gb_baseline_intervals[1], gb_baseline_intervals[2], gb_baseline_intervals[3]);
+    test_ret = gb_timer_list_expect("baseline-schedule", shape.base_time, GB_TIMER_LIST_TOL_NS, 0);
+    if (test_ret < 0)
+        goto cleanup;
+
+    ret = gb_clock_gettime_ns(clkid, &now_ns);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    shape.interval_ns = GB_TIMER_LIST_INTERVAL_NS;
+    shape.cycle_time = GB_TIMER_LIST_INTERVAL_NS;
+    shape.cycle_time_ext = 0;
+    shape.entries = 1;
+    entry.interval = (uint32_t)GB_TIMER_LIST_INTERVAL_NS;
+
+    base_old = now_ns + GB_TIMER_LIST_OLD_DELTA_NS;
+    base_new = now_ns + GB_TIMER_LIST_NEW_DELTA_NS;
+    shape.base_time = base_old;
+
+    gb_nl_msg_reset(msg);
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, NLM_F_REPLACE, 0, -1);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    printf("replace-old: base=%llu cycle=%llu interval=%u\n", (unsigned long long)base_old,
+           (unsigned long long)shape.cycle_time, entry.interval);
+    test_ret = gb_timer_list_expect("replace-old", base_old, GB_TIMER_LIST_TOL_NS, 0);
+    if (test_ret < 0)
+        goto cleanup;
 
     shape.base_time = base_new;
     gb_nl_msg_reset(msg);
