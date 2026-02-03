@@ -31,8 +31,12 @@ static const struct gb_selftest_case stable_tests[] = {
     {"clockid variants", gb_selftest_clockid_variants, 0},
     {"cycle time derivation", gb_selftest_cycle_time_derivation, 0},
     {"cycle time extension parsing", gb_selftest_cycle_time_ext_parsing, 0},
+    {"cycle time supplied", gb_selftest_cycle_time_supplied, 0},
     {"dump correctness", gb_selftest_dump_correctness, 0},
+    {"priority and flags", gb_selftest_priority_flags, 0},
+    {"entry defaults", gb_selftest_entry_defaults, 0},
     {"multiple entries", gb_selftest_multiple_entries, 0},
+    {"entry corner cases", gb_selftest_entry_corner_cases, 0},
     {"replace invalid", gb_selftest_replace_invalid, 0},
 };
 
