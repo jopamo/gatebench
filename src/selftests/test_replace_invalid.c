@@ -72,7 +72,7 @@ int gb_selftest_replace_invalid(struct gb_nl_sock* sock, uint32_t base_index) {
     msg->len = nlh->nlmsg_len;
     ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
     if (ret != -EINVAL) {
-        printf("Expected -EINVAL for invalid REPLACE, got %d\n", ret);
+        gb_selftest_log("Expected -EINVAL for invalid REPLACE, got %d\n", ret);
         test_ret = -1;
         goto cleanup;
     }
@@ -85,7 +85,7 @@ int gb_selftest_replace_invalid(struct gb_nl_sock* sock, uint32_t base_index) {
     }
 
     if (dump.base_time != 1234567) {
-        printf("REPLACE failure corrupted state: base_time %lu (expected 1234567)\n", dump.base_time);
+        gb_selftest_log("REPLACE failure corrupted state: base_time %lu (expected 1234567)\n", dump.base_time);
         test_ret = -EINVAL;
     }
 

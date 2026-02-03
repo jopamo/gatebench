@@ -153,40 +153,40 @@ static int gb_timer_list_expect_found(const char* label,
 
     if (ret < 0) {
         if (ret == -ERANGE) {
-            printf("%s: expiry mismatch (expected ~%llu, got %llu)\n", label, (unsigned long long)expected_ns,
-                   (unsigned long long)found_expiry);
+            gb_selftest_log("%s: expiry mismatch (expected ~%llu, got %llu)\n", label, (unsigned long long)expected_ns,
+                            (unsigned long long)found_expiry);
             return -EINVAL;
         }
         if (ret == -ENOENT) {
-            printf("%s: missing gate_timer_func entry\n", label);
+            gb_selftest_log("%s: missing gate_timer_func entry\n", label);
             return -EINVAL;
         }
         if (ret == -EACCES || ret == -EPERM) {
-            printf("%s: timer_list unreadable; run as root to validate\n", label);
+            gb_selftest_log("%s: timer_list unreadable; run as root to validate\n", label);
             return ret;
         }
-        printf("%s: timer_list check failed: %s\n", label, strerror(-ret));
+        gb_selftest_log("%s: timer_list check failed: %s\n", label, strerror(-ret));
         return ret;
     }
 
     diff = gb_abs_diff_u64(found_expiry, expected_ns);
-    printf("%s: expected=%llu +/- %llu, found=%llu (soft=%llu) diff=%llu state=0x%x\n", label,
-           (unsigned long long)expected_ns, (unsigned long long)tolerance_ns, (unsigned long long)found_expiry,
-           (unsigned long long)found_soft, (unsigned long long)diff, found_state);
+    gb_selftest_log("%s: expected=%llu +/- %llu, found=%llu (soft=%llu) diff=%llu state=0x%x\n", label,
+                    (unsigned long long)expected_ns, (unsigned long long)tolerance_ns, (unsigned long long)found_expiry,
+                    (unsigned long long)found_soft, (unsigned long long)diff, found_state);
 
     if (soft_hard_mismatch) {
-        printf("%s: soft/hard expiry mismatch\n", label);
+        gb_selftest_log("%s: soft/hard expiry mismatch\n", label);
         return -EINVAL;
     }
 
     if (found_state == 0) {
-        printf("%s: gate timer not enqueued (state=0x%x)\n", label, found_state);
+        gb_selftest_log("%s: gate timer not enqueued (state=0x%x)\n", label, found_state);
         return -EINVAL;
     }
 
     if (max_allowed_ns != 0 && found_expiry > max_allowed_ns + tolerance_ns) {
-        printf("%s: expiry wrapped (got %llu > %llu)\n", label, (unsigned long long)found_expiry,
-               (unsigned long long)max_allowed_ns);
+        gb_selftest_log("%s: expiry wrapped (got %llu > %llu)\n", label, (unsigned long long)found_expiry,
+                        (unsigned long long)max_allowed_ns);
         return -EINVAL;
     }
 
@@ -293,11 +293,12 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
         goto out;
     }
 
-    printf("baseline-schedule: now=%llu base=%llu cycle=%llu entries=%u pattern=%u,%u,%u,%u,%u,%u,%u,%u\n",
-           (unsigned long long)now_ns, (unsigned long long)shape.base_time, (unsigned long long)shape.cycle_time,
-           GB_TIMER_LIST_BASELINE_ENTRIES, gb_baseline_intervals[0], gb_baseline_intervals[1], gb_baseline_intervals[2],
-           gb_baseline_intervals[3], gb_baseline_intervals[4], gb_baseline_intervals[5], gb_baseline_intervals[6],
-           gb_baseline_intervals[7]);
+    gb_selftest_log("baseline-schedule: now=%llu base=%llu cycle=%llu entries=%u pattern=%u,%u,%u,%u,%u,%u,%u,%u\n",
+                    (unsigned long long)now_ns, (unsigned long long)shape.base_time,
+                    (unsigned long long)shape.cycle_time, GB_TIMER_LIST_BASELINE_ENTRIES, gb_baseline_intervals[0],
+                    gb_baseline_intervals[1], gb_baseline_intervals[2], gb_baseline_intervals[3],
+                    gb_baseline_intervals[4], gb_baseline_intervals[5], gb_baseline_intervals[6],
+                    gb_baseline_intervals[7]);
     test_ret = gb_timer_list_expect("baseline-schedule", shape.base_time, GB_TIMER_LIST_TOL_NS, 0);
     if (test_ret < 0)
         goto cleanup;
@@ -331,8 +332,8 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
         goto cleanup;
     }
 
-    printf("replace-old: base=%llu cycle=%llu interval=%u\n", (unsigned long long)base_old,
-           (unsigned long long)shape.cycle_time, entry.interval);
+    gb_selftest_log("replace-old: base=%llu cycle=%llu interval=%u\n", (unsigned long long)base_old,
+                    (unsigned long long)shape.cycle_time, entry.interval);
     test_ret = gb_timer_list_expect("replace-old", base_old, GB_TIMER_LIST_TOL_NS, 0);
     if (test_ret < 0)
         goto cleanup;
@@ -351,8 +352,9 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
         goto cleanup;
     }
 
-    printf("replace-forward: base_old=%llu base_new=%llu cycle=%llu interval=%u\n", (unsigned long long)base_old,
-           (unsigned long long)base_new, (unsigned long long)shape.cycle_time, entry.interval);
+    gb_selftest_log("replace-forward: base_old=%llu base_new=%llu cycle=%llu interval=%u\n",
+                    (unsigned long long)base_old, (unsigned long long)base_new, (unsigned long long)shape.cycle_time,
+                    entry.interval);
     test_ret = gb_timer_list_expect("replace-forward", base_new, GB_TIMER_LIST_TOL_NS, 0);
     if (test_ret < 0)
         goto cleanup;
@@ -388,13 +390,13 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
 
     ret = gb_calc_expected_start(now_ns, clamp_base, clamp_cycle_old, &clamp_expected_old);
     if (ret < 0) {
-        printf("active-clamp-old: expected start overflow\n");
+        gb_selftest_log("active-clamp-old: expected start overflow\n");
         test_ret = -EINVAL;
         goto cleanup;
     }
 
-    printf("active-clamp-old: now=%llu base=%llu cycle=%llu interval=%u\n", (unsigned long long)now_ns,
-           (unsigned long long)clamp_base, (unsigned long long)clamp_cycle_old, entry.interval);
+    gb_selftest_log("active-clamp-old: now=%llu base=%llu cycle=%llu interval=%u\n", (unsigned long long)now_ns,
+                    (unsigned long long)clamp_base, (unsigned long long)clamp_cycle_old, entry.interval);
     test_ret = gb_timer_list_expect_found("active-clamp-old", clamp_expected_old, GB_TIMER_LIST_TOL_NS * 2, 0,
                                           &clamp_old_expiry);
     if (test_ret < 0)
@@ -426,14 +428,14 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
 
     ret = gb_calc_expected_start(now_ns, clamp_base, clamp_cycle_new, &clamp_expected_new);
     if (ret < 0) {
-        printf("active-clamp-new: expected start overflow\n");
+        gb_selftest_log("active-clamp-new: expected start overflow\n");
         test_ret = -EINVAL;
         goto cleanup;
     }
 
-    printf("active-clamp-new: now=%llu base=%llu cycle=%llu interval=%u expected_new=%llu old_expiry=%llu\n",
-           (unsigned long long)now_ns, (unsigned long long)clamp_base, (unsigned long long)clamp_cycle_new,
-           entry.interval, (unsigned long long)clamp_expected_new, (unsigned long long)clamp_old_expiry);
+    gb_selftest_log("active-clamp-new: now=%llu base=%llu cycle=%llu interval=%u expected_new=%llu old_expiry=%llu\n",
+                    (unsigned long long)now_ns, (unsigned long long)clamp_base, (unsigned long long)clamp_cycle_new,
+                    entry.interval, (unsigned long long)clamp_expected_new, (unsigned long long)clamp_old_expiry);
     test_ret = gb_timer_list_expect("active-clamp-new", clamp_old_expiry, GB_TIMER_LIST_TOL_NS * 2, 0);
     if (test_ret < 0)
         goto cleanup;
@@ -467,12 +469,12 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
     }
     ret = gb_calc_expected_start(now_ns, base_past, shape.cycle_time, &expected_ns);
     if (ret < 0) {
-        printf("past-base: expected start overflow\n");
+        gb_selftest_log("past-base: expected start overflow\n");
         test_ret = -EINVAL;
         goto cleanup;
     }
-    printf("past-base: now=%llu base=%llu cycle=%llu interval=%u\n", (unsigned long long)now_ns,
-           (unsigned long long)base_past, (unsigned long long)shape.cycle_time, entry.interval);
+    gb_selftest_log("past-base: now=%llu base=%llu cycle=%llu interval=%u\n", (unsigned long long)now_ns,
+                    (unsigned long long)base_past, (unsigned long long)shape.cycle_time, entry.interval);
     test_ret = gb_timer_list_expect("past-base", expected_ns, GB_TIMER_LIST_TOL_NS * 2, 0);
     if (test_ret < 0)
         goto cleanup;
@@ -508,12 +510,12 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
     }
     ret = gb_calc_expected_start(now_ns, base_epoch, shape.cycle_time, &expected_ns);
     if (ret < 0) {
-        printf("mid-cycle-past: expected start overflow\n");
+        gb_selftest_log("mid-cycle-past: expected start overflow\n");
         test_ret = -EINVAL;
         goto cleanup;
     }
-    printf("mid-cycle-past: now=%llu base=%llu cycle=%llu interval=%u\n", (unsigned long long)now_ns,
-           (unsigned long long)base_epoch, (unsigned long long)shape.cycle_time, entry.interval);
+    gb_selftest_log("mid-cycle-past: now=%llu base=%llu cycle=%llu interval=%u\n", (unsigned long long)now_ns,
+                    (unsigned long long)base_epoch, (unsigned long long)shape.cycle_time, entry.interval);
     test_ret = gb_timer_list_expect("mid-cycle-past", expected_ns, GB_TIMER_LIST_TOL_NS * 2, 0);
     if (test_ret < 0)
         goto cleanup;
@@ -536,8 +538,8 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
             test_ret = ret;
             goto cleanup;
         }
-        printf("near-max-future: base=%llu cycle=%llu interval=%u\n", (unsigned long long)base_max,
-               (unsigned long long)shape.cycle_time, entry.interval);
+        gb_selftest_log("near-max-future: base=%llu cycle=%llu interval=%u\n", (unsigned long long)base_max,
+                        (unsigned long long)shape.cycle_time, entry.interval);
         test_ret = gb_timer_list_expect("near-max-future", base_max, GB_TIMER_LIST_TOL_NS, (uint64_t)INT64_MAX);
         if (test_ret < 0)
             goto cleanup;
@@ -573,12 +575,12 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
     }
     ret = gb_calc_expected_start(now_ns, base_past, large_cycle, &expected_ns);
     if (ret < 0) {
-        printf("large-cycle: expected start overflow\n");
+        gb_selftest_log("large-cycle: expected start overflow\n");
         test_ret = -EINVAL;
         goto cleanup;
     }
-    printf("large-cycle: now=%llu base=%llu cycle=%llu interval=%u\n", (unsigned long long)now_ns,
-           (unsigned long long)base_past, (unsigned long long)large_cycle, entry.interval);
+    gb_selftest_log("large-cycle: now=%llu base=%llu cycle=%llu interval=%u\n", (unsigned long long)now_ns,
+                    (unsigned long long)base_past, (unsigned long long)large_cycle, entry.interval);
     test_ret = gb_timer_list_expect("large-cycle", expected_ns, GB_TIMER_LIST_TOL_NS, (uint64_t)INT64_MAX);
     if (test_ret < 0)
         goto cleanup;

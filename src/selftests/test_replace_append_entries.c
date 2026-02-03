@@ -59,12 +59,12 @@ int gb_selftest_replace_append_entries(struct gb_nl_sock* sock, uint32_t base_in
     }
 
     if (dump.num_entries != 2) {
-        printf("REPLACE append failed: expected 2 entries, got %u\n", dump.num_entries);
+        gb_selftest_log("REPLACE append failed: expected 2 entries, got %u\n", dump.num_entries);
         test_ret = -EINVAL;
     }
     else if (dump.entries[0].interval != entry1.interval || dump.entries[0].gate_state != entry1.gate_state ||
              dump.entries[1].interval != entry2.interval || dump.entries[1].gate_state != entry2.gate_state) {
-        printf("REPLACE append failed: entry order or contents mismatch\n");
+        gb_selftest_log("REPLACE append failed: entry order or contents mismatch\n");
         test_ret = -EINVAL;
     }
 

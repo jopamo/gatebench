@@ -55,7 +55,7 @@ int gb_selftest_replace_preserve_schedule(struct gb_nl_sock* sock, uint32_t base
     }
 
     if (dump.cycle_time != 2000000 || dump.num_entries != 1 || dump.entries[0].interval != 1000000) {
-        printf("Schedule preservation failed: cycle %lu, entries %u\n", dump.cycle_time, dump.num_entries);
+        gb_selftest_log("Schedule preservation failed: cycle %lu, entries %u\n", dump.cycle_time, dump.num_entries);
         test_ret = -EINVAL;
     }
 

@@ -12,8 +12,6 @@ static const struct gb_selftest_case internal_tests[] = {
 
 static const struct gb_selftest_case stable_tests[] = {
     {"create missing parms", gb_selftest_create_missing_parms, -EINVAL},
-    {"create missing entry list", gb_selftest_create_missing_entries, 0},
-    {"create empty entry list", gb_selftest_create_empty_entries, 0},
     {"malformed nesting", gb_selftest_malformed_nesting, 0},
     {"create zero interval", gb_selftest_create_zero_interval, -EINVAL},
     {"create bad clockid", gb_selftest_create_bad_clockid, -EINVAL},
@@ -24,7 +22,6 @@ static const struct gb_selftest_case stable_tests[] = {
     {"replace without existing", gb_selftest_replace_without_existing, 0},
     {"duplicate create", gb_selftest_duplicate_create, -EEXIST},
     {"replace preserve schedule", gb_selftest_replace_preserve_schedule, 0},
-    {"replace append entries", gb_selftest_replace_append_entries, 0},
     {"base time update", gb_selftest_base_time_update, 0},
     {"timer list expiry", gb_selftest_timer_list_expiry, 0},
     {"replace persistence", gb_selftest_replace_persistence, 0},
@@ -34,15 +31,26 @@ static const struct gb_selftest_case stable_tests[] = {
     {"dump correctness", gb_selftest_dump_correctness, 0},
     {"multiple entries", gb_selftest_multiple_entries, 0},
     {"replace invalid", gb_selftest_replace_invalid, 0},
+};
+
+static const struct gb_selftest_case historical_tests[] = {
+    {"create missing entry list", gb_selftest_create_missing_entries, 0},
+    {"create empty entry list", gb_selftest_create_empty_entries, 0},
+    {"replace append entries", gb_selftest_replace_append_entries, 0},
+};
+
+static const struct gb_selftest_case unpatched_tests[] = {
     {"large dump", gb_selftest_large_dump, 0},
 };
 
 #define NUM_INTERNAL_TESTS (sizeof(internal_tests) / sizeof(internal_tests[0]))
 #define NUM_STABLE_TESTS (sizeof(stable_tests) / sizeof(stable_tests[0]))
-#define SOFTFAIL_LARGE_DUMP "large dump"
-#define SOFTFAIL_REPLACE_APPEND "replace append entries"
-#define SOFTFAIL_CREATE_MISSING_ENTRY_LIST "create missing entry list"
-#define SOFTFAIL_CREATE_EMPTY_ENTRY_LIST "create empty entry list"
+#define NUM_HISTORICAL_TESTS (sizeof(historical_tests) / sizeof(historical_tests[0]))
+#define NUM_UNPATCHED_TESTS (sizeof(unpatched_tests) / sizeof(unpatched_tests[0]))
+#define UNPATCHED_LARGE_DUMP "large dump"
+#define HISTORICAL_REPLACE_APPEND "replace append entries"
+#define HISTORICAL_CREATE_MISSING_ENTRY_LIST "create missing entry list"
+#define HISTORICAL_CREATE_EMPTY_ENTRY_LIST "create empty entry list"
 
 static bool is_soft_fail(const char* name, const char* const* soft_fail_names, size_t soft_fail_count) {
     if (!name || !soft_fail_names)
@@ -72,32 +80,37 @@ static int run_test_suite(const char* label,
     size_t soft_failed = 0;
     bool large_dump_failed = false;
 
-    printf("Running %zu %s selftests...\n", count, label);
+    printf("== %s selftests (%zu) ==\n", label, count);
 
     for (size_t i = 0; i < count; i++) {
         uint32_t test_index = base_index + (uint32_t)(i * 1024u);
         int ret;
 
-        printf("  %-30s ", tests[i].name);
-        fflush(stdout);
+        printf("  - %s\n", tests[i].name);
 
         ret = tests[i].func(sock, test_index);
 
         if (gb_nl_error_expected(ret, tests[i].expected_err)) {
-            printf("PASS (got %d)\n", ret);
+            printf("    [PASS] got %d\n", ret);
             passed++;
         }
         else {
-            printf("FAIL (got %d, expected %d)\n", ret, tests[i].expected_err);
+            bool is_soft = is_soft_fail(tests[i].name, soft_fail_names, soft_fail_count);
+
+            printf("    [%s] got %d, expected %d\n", is_soft ? "SOFTFAIL" : "FAIL", ret, tests[i].expected_err);
             failed++;
-            if (is_soft_fail(tests[i].name, soft_fail_names, soft_fail_count))
+            if (is_soft)
                 soft_failed++;
-            if (strcmp(tests[i].name, SOFTFAIL_LARGE_DUMP) == 0)
+            if (strcmp(tests[i].name, UNPATCHED_LARGE_DUMP) == 0)
                 large_dump_failed = true;
         }
     }
 
-    printf("%s selftests: %d/%zu passed\n\n", label, passed, count);
+    printf("%s selftests: %d/%zu passed", label, passed, count);
+    if (soft_failed > 0) {
+        printf(" (%zu soft-fail%s)", soft_failed, soft_failed == 1 ? "" : "s");
+    }
+    printf("\n\n");
 
     if (passed_out)
         *passed_out = passed;
@@ -116,14 +129,23 @@ int gb_selftest_run(struct gb_config* cfg) {
     uint32_t base_index;
     int internal_passed = 0;
     int stable_passed = 0;
+    int historical_passed = 0;
+    int unpatched_passed = 0;
     size_t stable_failed = 0;
     size_t stable_soft_failed = 0;
+    size_t historical_failed = 0;
+    size_t historical_soft_failed = 0;
+    size_t unpatched_failed = 0;
+    size_t unpatched_soft_failed = 0;
     bool large_dump_failed = false;
     int ret_internal;
     int ret_stable;
+    int ret_historical;
+    int ret_unpatched;
     int ret;
-    static const char* const soft_fail_tests[] = {SOFTFAIL_LARGE_DUMP, SOFTFAIL_REPLACE_APPEND,
-                                                  SOFTFAIL_CREATE_MISSING_ENTRY_LIST, SOFTFAIL_CREATE_EMPTY_ENTRY_LIST};
+    static const char* const historical_fail_tests[] = {HISTORICAL_CREATE_MISSING_ENTRY_LIST,
+                                                        HISTORICAL_CREATE_EMPTY_ENTRY_LIST, HISTORICAL_REPLACE_APPEND};
+    static const char* const unpatched_fail_tests[] = {UNPATCHED_LARGE_DUMP};
 
     base_index = cfg->index;
 
@@ -137,32 +159,51 @@ int gb_selftest_run(struct gb_config* cfg) {
     }
 
     ret_stable = run_test_suite("stable regression", stable_tests, NUM_STABLE_TESTS, sock, base_index, &stable_passed,
-                                &stable_failed, &stable_soft_failed, soft_fail_tests,
-                                sizeof(soft_fail_tests) / sizeof(soft_fail_tests[0]), &large_dump_failed);
+                                &stable_failed, &stable_soft_failed, NULL, 0, NULL);
+
+    ret_historical = run_test_suite("historical behavior", historical_tests, NUM_HISTORICAL_TESTS, sock,
+                                    base_index + (uint32_t)(NUM_STABLE_TESTS * 1024u), &historical_passed,
+                                    &historical_failed, &historical_soft_failed, historical_fail_tests,
+                                    sizeof(historical_fail_tests) / sizeof(historical_fail_tests[0]), NULL);
+
+    ret_unpatched = run_test_suite("unpatched behavior", unpatched_tests, NUM_UNPATCHED_TESTS, sock,
+                                   base_index + (uint32_t)((NUM_STABLE_TESTS + NUM_HISTORICAL_TESTS) * 1024u),
+                                   &unpatched_passed, &unpatched_failed, &unpatched_soft_failed, unpatched_fail_tests,
+                                   sizeof(unpatched_fail_tests) / sizeof(unpatched_fail_tests[0]), &large_dump_failed);
 
     gb_nl_close(sock);
 
-    printf("Selftests total: %d/%zu passed\n", internal_passed + stable_passed, NUM_INTERNAL_TESTS + NUM_STABLE_TESTS);
+    printf("Selftests summary: internal %d/%zu, stable %d/%zu, historical %d/%zu, unpatched %d/%zu\n", internal_passed,
+           NUM_INTERNAL_TESTS, stable_passed, NUM_STABLE_TESTS, historical_passed, NUM_HISTORICAL_TESTS,
+           unpatched_passed, NUM_UNPATCHED_TESTS);
 
     if (stable_soft_failed > 0 && stable_failed == stable_soft_failed) {
         ret_stable = 0;
+    }
+
+    if (historical_soft_failed > 0 && historical_failed == historical_soft_failed) {
+        ret_historical = 0;
+    }
+
+    if (unpatched_soft_failed > 0 && unpatched_failed == unpatched_soft_failed) {
+        ret_unpatched = 0;
         if (large_dump_failed) {
             uint32_t old_entries = cfg->entries;
 
             if (old_entries > 50) {
                 cfg->entries = 50;
                 if (cfg->json) {
-                    fprintf(stderr, "Large dump failed; setting benchmark entries to 50 (was %u)\n", old_entries);
+                    fprintf(stderr, "Note: large dump failed; setting benchmark entries to 50 (was %u)\n", old_entries);
                 }
                 else {
-                    printf("Large dump failed; setting benchmark entries to 50 (was %u)\n", old_entries);
+                    printf("Note: large dump failed; setting benchmark entries to 50 (was %u)\n", old_entries);
                 }
             }
         }
     }
 
-    if (ret_internal == 0 && ret_stable == 0) {
-        if (stable_soft_failed > 0)
+    if (ret_internal == 0 && ret_stable == 0 && ret_historical == 0 && ret_unpatched == 0) {
+        if (stable_soft_failed > 0 || historical_soft_failed > 0 || unpatched_soft_failed > 0)
             return 1;
         return 0;
     }
