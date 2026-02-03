@@ -1,3 +1,6 @@
+/* include/gatebench_selftest.h
+ * Public API for self-tests.
+ */
 #ifndef GATEBENCH_SELFTEST_H
 #define GATEBENCH_SELFTEST_H
 

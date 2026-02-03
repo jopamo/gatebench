@@ -1,3 +1,6 @@
+/* include/gatebench_cli.h
+ * Public API for CLI parsing.
+ */
 #ifndef GATEBENCH_CLI_H
 #define GATEBENCH_CLI_H
 

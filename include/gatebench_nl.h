@@ -1,3 +1,6 @@
+/* include/gatebench_nl.h
+ * Public API for netlink operations.
+ */
 #ifndef GATEBENCH_NL_H
 #define GATEBENCH_NL_H
 

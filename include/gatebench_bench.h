@@ -1,3 +1,6 @@
+/* include/gatebench_bench.h
+ * Public API for benchmark execution.
+ */
 #ifndef GATEBENCH_BENCH_H
 #define GATEBENCH_BENCH_H
 

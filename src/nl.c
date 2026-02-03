@@ -1,3 +1,6 @@
+/* src/nl.c
+ * Netlink socket operations and message sending/receiving.
+ */
 #include "../include/gatebench_nl.h"
 #include "../include/gatebench_gate.h"
 #include <libmnl/libmnl.h>

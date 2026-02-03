@@ -1,3 +1,6 @@
+/* src/main.c
+ * Main entry point and orchestration of the benchmark tool.
+ */
 #include "../include/gatebench.h"
 #include "../include/gatebench_cli.h"
 #include "../include/gatebench_nl.h"

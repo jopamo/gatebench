@@ -1,3 +1,6 @@
+/* include/gatebench_util.h
+ * Public API for utility functions.
+ */
 #ifndef GATEBENCH_UTIL_H
 #define GATEBENCH_UTIL_H
 

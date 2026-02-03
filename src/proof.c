@@ -1,3 +1,6 @@
+/* src/proof.c
+ * Verification and proof-of-correctness routines.
+ */
 #include "../include/gatebench_proof.h"
 #include "../include/gatebench_gate.h"
 #include "../include/gatebench_nl.h"

@@ -1,3 +1,6 @@
+/* include/gatebench_gate.h
+ * Definitions for gate control operations.
+ */
 #ifndef GATEBENCH_GATE_H
 #define GATEBENCH_GATE_H
 

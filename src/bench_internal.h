@@ -1,3 +1,6 @@
+/* src/bench_internal.h
+ * Internal declarations for the benchmark module.
+ */
 #ifndef GATEBENCH_BENCH_INTERNAL_H
 #define GATEBENCH_BENCH_INTERNAL_H
 

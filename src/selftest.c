@@ -1,3 +1,6 @@
+/* src/selftest.c
+ * Self-test routines to validate environment before benchmarking.
+ */
 #include "../include/gatebench_selftest.h"
 #include "selftests/selftest_common.h"
 #include "selftests/selftest_tests.h"
