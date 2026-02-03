@@ -36,7 +36,7 @@ int gb_selftest_clockid_variants(struct gb_nl_sock* sock, uint32_t base_index) {
 
         ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
         if (ret < 0) {
-            printf("Failed to create with clockid %u: %d\n", clockid, ret);
+            gb_selftest_log("Failed to create with clockid %u: %d\n", clockid, ret);
             test_ret = ret;
             goto cleanup;
         }
@@ -48,7 +48,7 @@ int gb_selftest_clockid_variants(struct gb_nl_sock* sock, uint32_t base_index) {
         }
 
         if (dump.clockid != clockid) {
-            printf("Clock ID mismatch: expected %u, got %u\n", clockid, dump.clockid);
+            gb_selftest_log("Clock ID mismatch: expected %u, got %u\n", clockid, dump.clockid);
             test_ret = -EINVAL;
             gb_gate_dump_free(&dump);
             goto cleanup;

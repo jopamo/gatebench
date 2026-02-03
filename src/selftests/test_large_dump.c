@@ -47,12 +47,12 @@ int gb_selftest_large_dump(struct gb_nl_sock* sock, uint32_t base_index) {
         goto cleanup;
     }
 
-    printf("DEBUG: large dump msg_len=%zu cap=%zu entries=%u cycle_time=%llu\n", msg->len, msg->cap, num_entries,
-           (unsigned long long)shape.cycle_time);
+    gb_selftest_log("DEBUG: large dump msg_len=%zu cap=%zu entries=%u cycle_time=%llu\n", msg->len, msg->cap,
+                    num_entries, (unsigned long long)shape.cycle_time);
 
     ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
     if (ret < 0) {
-        printf("Large dump create failed: %d (%s)\n", ret, gb_nl_strerror(ret));
+        gb_selftest_log("Large dump create failed: %d (%s)\n", ret, gb_nl_strerror(ret));
         test_ret = ret;
         goto cleanup;
     }
@@ -60,14 +60,14 @@ int gb_selftest_large_dump(struct gb_nl_sock* sock, uint32_t base_index) {
     /* Verify dump */
     ret = gb_nl_get_action(sock, base_index, &dump, GB_SELFTEST_TIMEOUT_MS);
     if (ret < 0) {
-        printf("Large dump get_action failed: %d (%s)\n", ret, gb_nl_strerror(ret));
+        gb_selftest_log("Large dump get_action failed: %d (%s)\n", ret, gb_nl_strerror(ret));
         test_ret = ret;
         goto cleanup;
     }
     dump_valid = true;
 
     if (dump.num_entries != num_entries) {
-        printf("Large dump failed: got %u entries, expected %u\n", dump.num_entries, num_entries);
+        gb_selftest_log("Large dump failed: got %u entries, expected %u\n", dump.num_entries, num_entries);
         test_ret = -EINVAL;
     }
     else {
@@ -75,7 +75,7 @@ int gb_selftest_large_dump(struct gb_nl_sock* sock, uint32_t base_index) {
         for (uint32_t i = 0; i < num_entries; i++) {
             if (dump.entries[i].index != i || dump.entries[i].interval != entries[i].interval ||
                 dump.entries[i].gate_state != entries[i].gate_state) {
-                printf("Large dump data mismatch at entry %u\n", i);
+                gb_selftest_log("Large dump data mismatch at entry %u\n", i);
                 test_ret = -EINVAL;
                 break;
             }
@@ -90,38 +90,39 @@ cleanup:
     gb_nl_msg_reset(msg);
     ret = build_gate_flushaction(msg);
     if (ret < 0) {
-        printf("Gate flush build failed: %d (%s)\n", ret, gb_nl_strerror(ret));
+        gb_selftest_log("Gate flush build failed: %d (%s)\n", ret, gb_nl_strerror(ret));
     }
     else {
         uint32_t fcnt = UINT32_MAX;
         ret = gb_nl_send_recv_flush(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS, &fcnt);
         if (ret < 0) {
-            printf("Gate flush failed: %d (%s)\n", ret, gb_nl_strerror(ret));
+            gb_selftest_log("Gate flush failed: %d (%s)\n", ret, gb_nl_strerror(ret));
         }
         else if (fcnt == UINT32_MAX) {
-            printf("Gate flush notification: fcnt=missing\n");
+            gb_selftest_log("Gate flush notification: fcnt=missing\n");
         }
         else {
-            printf("Gate flush notification: fcnt=%u\n", fcnt);
+            gb_selftest_log("Gate flush notification: fcnt=%u\n", fcnt);
         }
     }
     gb_nl_msg_reset(msg);
     ret = build_gate_dumpaction(msg);
     if (ret < 0) {
-        printf("Gate dump build failed: %d (%s)\n", ret, gb_nl_strerror(ret));
+        gb_selftest_log("Gate dump build failed: %d (%s)\n", ret, gb_nl_strerror(ret));
     }
     else {
         memset(&dump_stats, 0, sizeof(dump_stats));
         ret = gb_nl_dump_action(sock, msg, &dump_stats, GB_SELFTEST_TIMEOUT_MS);
         if (ret < 0) {
-            printf("Gate dump failed: %d (%s)\n", ret, gb_nl_strerror(ret));
+            gb_selftest_log("Gate dump failed: %d (%s)\n", ret, gb_nl_strerror(ret));
         }
         else {
-            printf("post-flush gate dump: actions=%u reply_msgs=%u done=%d error=%d\n", dump_stats.action_count,
-                   dump_stats.reply_msgs, dump_stats.saw_done ? 1 : 0, dump_stats.saw_error ? 1 : 0);
+            gb_selftest_log("post-flush gate dump: actions=%u reply_msgs=%u done=%d error=%d\n",
+                            dump_stats.action_count, dump_stats.reply_msgs, dump_stats.saw_done ? 1 : 0,
+                            dump_stats.saw_error ? 1 : 0);
             if (dump_stats.saw_error)
-                printf("post-flush gate dump error: %d (%s)\n", dump_stats.error_code,
-                       gb_nl_strerror(dump_stats.error_code));
+                gb_selftest_log("post-flush gate dump error: %d (%s)\n", dump_stats.error_code,
+                                gb_nl_strerror(dump_stats.error_code));
         }
     }
 

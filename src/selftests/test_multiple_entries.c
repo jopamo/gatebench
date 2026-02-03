@@ -57,7 +57,7 @@ int gb_selftest_multiple_entries(struct gb_nl_sock* sock, uint32_t base_index) {
     }
 
     if (dump.num_entries != 3) {
-        printf("Multiple entries failed: expected 3, got %u\n", dump.num_entries);
+        gb_selftest_log("Multiple entries failed: expected 3, got %u\n", dump.num_entries);
         test_ret = -EINVAL;
         gb_gate_dump_free(&dump);
         goto cleanup;
@@ -67,7 +67,7 @@ int gb_selftest_multiple_entries(struct gb_nl_sock* sock, uint32_t base_index) {
         if (dump.entries[i].index != i || dump.entries[i].gate_state != entries[i].gate_state ||
             dump.entries[i].interval != entries[i].interval || dump.entries[i].ipv != entries[i].ipv ||
             dump.entries[i].maxoctets != entries[i].maxoctets) {
-            printf("Entry %u mismatch\n", i);
+            gb_selftest_log("Entry %u mismatch\n", i);
             test_ret = -EINVAL;
             break;
         }

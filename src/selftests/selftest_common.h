@@ -25,5 +25,6 @@ void gb_selftest_entry_default(struct gate_entry* entry);
 int gb_selftest_alloc_msgs(struct gb_nl_msg** msg, struct gb_nl_msg** resp, size_t capacity);
 void gb_selftest_free_msgs(struct gb_nl_msg* msg, struct gb_nl_msg* resp);
 void gb_selftest_cleanup_gate(struct gb_nl_sock* sock, struct gb_nl_msg* msg, struct gb_nl_msg* resp, uint32_t index);
+void gb_selftest_log(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 
 #endif /* GATEBENCH_SELFTEST_COMMON_H */

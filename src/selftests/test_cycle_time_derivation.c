@@ -50,7 +50,7 @@ int gb_selftest_cycle_time_derivation(struct gb_nl_sock* sock, uint32_t base_ind
     }
 
     if (dump.cycle_time != 2000000) {
-        printf("Cycle time derivation failed: expected 2000000, got %lu\n", dump.cycle_time);
+        gb_selftest_log("Cycle time derivation failed: expected 2000000, got %lu\n", dump.cycle_time);
         test_ret = -EINVAL;
     }
 

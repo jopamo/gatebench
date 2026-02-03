@@ -66,7 +66,7 @@ int gb_selftest_create_missing_entries(struct gb_nl_sock* sock, uint32_t base_in
     }
 
     if (dump.num_entries != 0) {
-        printf("Missing entry list accepted but created %u entries\n", dump.num_entries);
+        gb_selftest_log("Missing entry list accepted but created %u entries\n", dump.num_entries);
         test_ret = -EINVAL;
     }
 

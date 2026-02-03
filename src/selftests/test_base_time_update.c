@@ -57,7 +57,7 @@ int gb_selftest_base_time_update(struct gb_nl_sock* sock, uint32_t base_index) {
     }
 
     if (dump.base_time != 2000000 || dump.num_entries != 1) {
-        printf("Base time update failed: base %lu, entries %u\n", dump.base_time, dump.num_entries);
+        gb_selftest_log("Base time update failed: base %lu, entries %u\n", dump.base_time, dump.num_entries);
         test_ret = -EINVAL;
     }
 

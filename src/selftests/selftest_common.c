@@ -1,5 +1,7 @@
 #include "selftest_common.h"
 #include <errno.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 
@@ -62,4 +64,17 @@ void gb_selftest_cleanup_gate(struct gb_nl_sock* sock, struct gb_nl_msg* msg, st
     if (build_gate_delaction(msg, index) >= 0) {
         gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
     }
+}
+
+void gb_selftest_log(const char* fmt, ...) {
+    va_list args;
+
+    if (!fmt) {
+        return;
+    }
+
+    fputs("    | ", stdout);
+    va_start(args, fmt);
+    vfprintf(stdout, fmt, args);
+    va_end(args);
 }

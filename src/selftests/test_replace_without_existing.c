@@ -56,7 +56,8 @@ int gb_selftest_replace_without_existing(struct gb_nl_sock* sock, uint32_t base_
 
     if (dump.num_entries != 1 || dump.entries[0].index != 0 || dump.entries[0].interval != entry.interval ||
         dump.entries[0].gate_state != entry.gate_state) {
-        printf("REPLACE should create action: entries %u, interval %u\n", dump.num_entries, dump.entries[0].interval);
+        gb_selftest_log("REPLACE should create action: entries %u, interval %u\n", dump.num_entries,
+                        dump.entries[0].interval);
         test_ret = -EINVAL;
     }
 

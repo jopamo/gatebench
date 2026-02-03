@@ -71,12 +71,12 @@ int gb_selftest_malformed_nesting(struct gb_nl_sock* sock, uint32_t base_index) 
     }
 
     if (dump.num_entries != 1) {
-        printf("Malformed nesting should skip invalid entries: got %u entries\n", dump.num_entries);
+        gb_selftest_log("Malformed nesting should skip invalid entries: got %u entries\n", dump.num_entries);
         test_ret = -EINVAL;
     }
     else if (dump.entries[0].index != 0 || dump.entries[0].interval != GB_SELFTEST_DEFAULT_INTERVAL_NS ||
              !dump.entries[0].gate_state) {
-        printf("Malformed nesting preserved wrong entry contents\n");
+        gb_selftest_log("Malformed nesting preserved wrong entry contents\n");
         test_ret = -EINVAL;
     }
 

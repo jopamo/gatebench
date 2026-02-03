@@ -48,7 +48,7 @@ int gb_selftest_param_validation(struct gb_nl_sock* sock, uint32_t base_index) {
     msg->len = nlh->nlmsg_len;
     ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
     if (ret != -EINVAL) {
-        printf("Expected -EINVAL for bad BASE_TIME size, got %d\n", ret);
+        gb_selftest_log("Expected -EINVAL for bad BASE_TIME size, got %d\n", ret);
         gb_selftest_cleanup_gate(sock, msg, resp, base_index);
         ret = -1;
         goto out;
@@ -82,7 +82,7 @@ int gb_selftest_param_validation(struct gb_nl_sock* sock, uint32_t base_index) {
     msg->len = nlh->nlmsg_len;
     ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
     if (ret != -EINVAL) {
-        printf("Expected -EINVAL for bad CYCLE_TIME size, got %d\n", ret);
+        gb_selftest_log("Expected -EINVAL for bad CYCLE_TIME size, got %d\n", ret);
         gb_selftest_cleanup_gate(sock, msg, resp, base_index + 1);
         ret = -1;
         goto out;
@@ -116,7 +116,7 @@ int gb_selftest_param_validation(struct gb_nl_sock* sock, uint32_t base_index) {
     msg->len = nlh->nlmsg_len;
     ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
     if (ret != -EINVAL) {
-        printf("Expected -EINVAL for zero CYCLE_TIME when not derivable, got %d\n", ret);
+        gb_selftest_log("Expected -EINVAL for zero CYCLE_TIME when not derivable, got %d\n", ret);
         gb_selftest_cleanup_gate(sock, msg, resp, base_index + 2);
         ret = -1;
         goto out;

@@ -40,8 +40,8 @@ int gb_selftest_cycle_time_ext_parsing(struct gb_nl_sock* sock, uint32_t base_in
     }
 
     if (dump.cycle_time_ext != shape.cycle_time_ext) {
-        printf("Cycle time extension parsing failed: expected %lu, got %lu\n", shape.cycle_time_ext,
-               dump.cycle_time_ext);
+        gb_selftest_log("Cycle time extension parsing failed: expected %lu, got %lu\n", shape.cycle_time_ext,
+                        dump.cycle_time_ext);
         test_ret = -EINVAL;
     }
 

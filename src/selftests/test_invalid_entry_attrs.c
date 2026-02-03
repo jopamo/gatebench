@@ -111,7 +111,7 @@ int gb_selftest_invalid_entry_attrs(struct gb_nl_sock* sock, uint32_t base_index
             saw_einval = true;
         }
         else if (ret != 0) {
-            printf("Invalid entry attribute test %d unexpected error %d\n", i, ret);
+            gb_selftest_log("Invalid entry attribute test %d unexpected error %d\n", i, ret);
             test_ret = ret;
             gb_selftest_cleanup_gate(sock, msg, resp, index);
             break;
