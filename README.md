@@ -62,4 +62,5 @@ GPL-2
 
 - Linux kernel networking team for the `tc gate` action
 - `libmnl` authors for the netlink library
+- `iproute2` maintainers for `tc` reference behavior
 - Inspired by kernel selftests and benchmarking tools

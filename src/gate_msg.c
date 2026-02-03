@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <libmnl/libmnl.h>
 #include <linux/gen_stats.h>
+#include <linux/netlink.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -22,6 +23,17 @@ static void add_attr_u64(struct nlmsghdr* nlh, uint16_t type, uint64_t value) {
 
 static void add_attr_strz(struct nlmsghdr* nlh, uint16_t type, const char* str) {
     mnl_attr_put_strz(nlh, type, str);
+}
+
+static struct nlattr* add_attr_nest_raw(struct nlmsghdr* nlh, uint16_t type) {
+    struct nlattr* nest = (struct nlattr*)mnl_nlmsg_get_payload_tail(nlh);
+
+    mnl_attr_put(nlh, type, 0, NULL);
+    return nest;
+}
+
+static void add_attr_nest_raw_end(struct nlmsghdr* nlh, struct nlattr* nest) {
+    nest->nla_len = (uint16_t)((char*)mnl_nlmsg_get_payload_tail(nlh) - (char*)nest);
 }
 
 static int mnl_attr_cb_copy(const struct nlattr* attr, void* data) {
@@ -167,6 +179,41 @@ int build_gate_delaction(struct gb_nl_msg* msg, uint32_t index) {
     return 0;
 }
 
+int build_gate_flushaction(struct gb_nl_msg* msg) {
+    struct nlmsghdr* nlh;
+    struct tcamsg* tca;
+    struct nlattr *nest_tab, *nest_prio;
+    struct nla_bitfield32 flags;
+
+    if (!msg || !msg->buf)
+        return -EINVAL;
+
+    nlh = mnl_nlmsg_put_header(msg->buf);
+    nlh->nlmsg_type = RTM_DELACTION;
+    nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | NLM_F_ROOT;
+    nlh->nlmsg_seq = 0;
+
+    tca = mnl_nlmsg_put_extra_header(nlh, sizeof(*tca));
+    memset(tca, 0, sizeof(*tca));
+    tca->tca_family = AF_UNSPEC;
+
+    nest_tab = add_attr_nest_raw(nlh, TCA_ACT_TAB);
+    nest_prio = add_attr_nest_raw(nlh, GATEBENCH_ACT_PRIO);
+
+    add_attr_strz(nlh, TCA_ACT_KIND, "gate");
+
+    add_attr_nest_raw_end(nlh, nest_prio);
+    add_attr_nest_raw_end(nlh, nest_tab);
+
+    memset(&flags, 0, sizeof(flags));
+    flags.value = TCA_ACT_FLAG_LARGE_DUMP_ON;
+    flags.selector = TCA_ACT_FLAG_LARGE_DUMP_ON;
+    mnl_attr_put(nlh, TCA_ROOT_FLAGS, sizeof(flags), &flags);
+
+    msg->len = nlh->nlmsg_len;
+    return 0;
+}
+
 int build_gate_getaction_ex(struct gb_nl_msg* msg, uint32_t index, uint16_t nlmsg_flags) {
     struct nlmsghdr* nlh;
     struct tcamsg* tca;
@@ -199,6 +246,41 @@ int build_gate_getaction_ex(struct gb_nl_msg* msg, uint32_t index, uint16_t nlms
 
 int build_gate_getaction(struct gb_nl_msg* msg, uint32_t index) {
     return build_gate_getaction_ex(msg, index, NLM_F_ACK);
+}
+
+int build_gate_dumpaction(struct gb_nl_msg* msg) {
+    struct nlmsghdr* nlh;
+    struct tcamsg* tca;
+    struct nlattr *nest_tab, *nest_prio;
+    struct nla_bitfield32 flags;
+
+    if (!msg || !msg->buf)
+        return -EINVAL;
+
+    nlh = mnl_nlmsg_put_header(msg->buf);
+    nlh->nlmsg_type = RTM_GETACTION;
+    nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP;
+    nlh->nlmsg_seq = 0;
+
+    tca = mnl_nlmsg_put_extra_header(nlh, sizeof(*tca));
+    memset(tca, 0, sizeof(*tca));
+    tca->tca_family = AF_UNSPEC;
+
+    nest_tab = add_attr_nest_raw(nlh, TCA_ACT_TAB);
+    nest_prio = add_attr_nest_raw(nlh, GATEBENCH_ACT_PRIO);
+
+    add_attr_strz(nlh, TCA_ACT_KIND, "gate");
+
+    add_attr_nest_raw_end(nlh, nest_prio);
+    add_attr_nest_raw_end(nlh, nest_tab);
+
+    memset(&flags, 0, sizeof(flags));
+    flags.value = TCA_ACT_FLAG_LARGE_DUMP_ON;
+    flags.selector = TCA_ACT_FLAG_LARGE_DUMP_ON;
+    mnl_attr_put(nlh, TCA_ROOT_FLAGS, sizeof(flags), &flags);
+
+    msg->len = nlh->nlmsg_len;
+    return 0;
 }
 
 void gb_gate_dump_free(struct gate_dump* dump) {
