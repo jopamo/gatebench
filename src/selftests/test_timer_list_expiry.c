@@ -1,5 +1,6 @@
 #include "selftest_tests.h"
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -10,6 +11,8 @@
 #define GB_TIMER_LIST_OLD_DELTA_NS 2000000000ull
 #define GB_TIMER_LIST_NEW_DELTA_NS 6000000000ull
 #define GB_TIMER_LIST_TOL_NS 100000000ull
+#define GB_TIMER_LIST_RETRIES 5
+#define GB_TIMER_LIST_RETRY_NS 20000000ull
 
 static int gb_clock_gettime_ns(clockid_t clkid, uint64_t* out_ns) {
     struct timespec ts;
@@ -94,6 +97,88 @@ static int gb_timer_list_find_gate(uint64_t expected_ns,
     return 0;
 }
 
+static int gb_timer_list_expect(const char* label,
+                                uint64_t expected_ns,
+                                uint64_t tolerance_ns,
+                                uint64_t max_allowed_ns) {
+    struct timespec req = {0};
+    uint64_t found_expiry = 0;
+    unsigned int found_state = 0;
+    bool soft_hard_mismatch = false;
+    int ret = -ERANGE;
+
+    req.tv_nsec = (long)GB_TIMER_LIST_RETRY_NS;
+
+    for (int i = 0; i < GB_TIMER_LIST_RETRIES; i++) {
+        ret = gb_timer_list_find_gate(expected_ns, tolerance_ns, &found_expiry, &found_state, &soft_hard_mismatch);
+        if (ret == 0 || ret == -EACCES || ret == -EPERM)
+            break;
+        nanosleep(&req, NULL);
+    }
+
+    if (ret < 0) {
+        if (ret == -ERANGE) {
+            printf("%s: expiry mismatch (expected ~%llu, got %llu)\n", label, (unsigned long long)expected_ns,
+                   (unsigned long long)found_expiry);
+            return -EINVAL;
+        }
+        if (ret == -ENOENT) {
+            printf("%s: missing gate_timer_func entry\n", label);
+            return -EINVAL;
+        }
+        if (ret == -EACCES || ret == -EPERM) {
+            printf("%s: timer_list unreadable; run as root to validate\n", label);
+            return ret;
+        }
+        printf("%s: timer_list check failed: %s\n", label, strerror(-ret));
+        return ret;
+    }
+
+    if (soft_hard_mismatch) {
+        printf("%s: soft/hard expiry mismatch\n", label);
+        return -EINVAL;
+    }
+
+    if (found_state == 0) {
+        printf("%s: gate timer not enqueued (state=0x%x)\n", label, found_state);
+        return -EINVAL;
+    }
+
+    if (max_allowed_ns != 0 && found_expiry > max_allowed_ns + tolerance_ns) {
+        printf("%s: expiry wrapped (got %llu > %llu)\n", label, (unsigned long long)found_expiry,
+               (unsigned long long)max_allowed_ns);
+        return -EINVAL;
+    }
+
+    return 0;
+}
+
+static int gb_calc_expected_start(uint64_t now_ns, uint64_t base_ns, uint64_t cycle_ns, uint64_t* out_ns) {
+    __int128 start;
+    uint64_t diff;
+    uint64_t n;
+
+    if (!out_ns || cycle_ns == 0)
+        return -EINVAL;
+
+    if (base_ns > (uint64_t)INT64_MAX || cycle_ns > (uint64_t)INT64_MAX)
+        return -ERANGE;
+
+    if (base_ns > now_ns) {
+        *out_ns = base_ns;
+        return 0;
+    }
+
+    diff = now_ns - base_ns;
+    n = diff / cycle_ns;
+    start = (__int128)base_ns + ((__int128)(n + 1) * (__int128)cycle_ns);
+    if (start > INT64_MAX)
+        return -ERANGE;
+
+    *out_ns = (uint64_t)start;
+    return 0;
+}
+
 int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) {
     struct gb_nl_msg* msg = NULL;
     struct gb_nl_msg* resp = NULL;
@@ -102,9 +187,11 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
     uint64_t now_ns = 0;
     uint64_t base_old;
     uint64_t base_new;
-    uint64_t found_expiry = 0;
-    unsigned int found_state = 0;
-    bool soft_hard_mismatch = false;
+    uint64_t expected_ns = 0;
+    uint64_t base_epoch = 0;
+    uint64_t base_past = 0;
+    uint64_t base_max = 0;
+    uint64_t large_cycle = 0;
     clockid_t clkid = CLOCK_TAI;
     int ret;
     int test_ret = 0;
@@ -166,39 +253,146 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
         goto cleanup;
     }
 
-    ret = gb_timer_list_find_gate(base_new, GB_TIMER_LIST_TOL_NS, &found_expiry, &found_state, &soft_hard_mismatch);
+    test_ret = gb_timer_list_expect("replace-forward", base_new, GB_TIMER_LIST_TOL_NS, 0);
+    if (test_ret < 0)
+        goto cleanup;
+
+    ret = gb_clock_gettime_ns(clkid, &now_ns);
     if (ret < 0) {
-        if (ret == -ERANGE) {
-            printf("timer_list expiry mismatch: expected ~%llu, got %llu\n", (unsigned long long)base_new,
-                   (unsigned long long)found_expiry);
-            test_ret = -EINVAL;
-        }
-        else if (ret == -ENOENT) {
-            printf("timer_list missing gate_timer_func entry\n");
-            test_ret = -EINVAL;
-        }
-        else if (ret == -EACCES || ret == -EPERM) {
-            printf("timer_list unreadable; run as root to validate\n");
-            test_ret = ret;
-        }
-        else {
-            printf("timer_list check failed: %s\n", strerror(-ret));
-            test_ret = ret;
-        }
+        test_ret = ret;
         goto cleanup;
     }
 
-    if (soft_hard_mismatch) {
-        printf("timer_list soft/hard expiry mismatch\n");
+    if (now_ns > 1500000000ull)
+        base_past = now_ns - 1500000000ull;
+    else
+        base_past = 0;
+
+    shape.base_time = base_past;
+    shape.cycle_time = GB_TIMER_LIST_INTERVAL_NS;
+    shape.interval_ns = GB_TIMER_LIST_INTERVAL_NS;
+    entry.interval = (uint32_t)GB_TIMER_LIST_INTERVAL_NS;
+
+    gb_nl_msg_reset(msg);
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, NLM_F_REPLACE, 0, -1);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+    ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+    ret = gb_calc_expected_start(now_ns, base_past, shape.cycle_time, &expected_ns);
+    if (ret < 0) {
+        printf("past-base: expected start overflow\n");
         test_ret = -EINVAL;
+        goto cleanup;
+    }
+    test_ret = gb_timer_list_expect("past-base", expected_ns, GB_TIMER_LIST_TOL_NS * 2, 0);
+    if (test_ret < 0)
+        goto cleanup;
+
+    ret = gb_clock_gettime_ns(clkid, &now_ns);
+    if (ret < 0) {
+        test_ret = ret;
         goto cleanup;
     }
 
-    if (found_state == 0) {
-        printf("timer_list gate timer not enqueued (state=0x%x)\n", found_state);
+    {
+        uint64_t offset = (GB_TIMER_LIST_INTERVAL_NS * 5ull) + (GB_TIMER_LIST_INTERVAL_NS / 2ull);
+        if (now_ns > offset)
+            base_epoch = now_ns - offset;
+        else
+            base_epoch = 0;
+    }
+    shape.base_time = base_epoch;
+    shape.cycle_time = GB_TIMER_LIST_INTERVAL_NS;
+    shape.interval_ns = GB_TIMER_LIST_INTERVAL_NS;
+    entry.interval = (uint32_t)GB_TIMER_LIST_INTERVAL_NS;
+
+    gb_nl_msg_reset(msg);
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, NLM_F_REPLACE, 0, -1);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+    ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+    ret = gb_calc_expected_start(now_ns, base_epoch, shape.cycle_time, &expected_ns);
+    if (ret < 0) {
+        printf("mid-cycle-past: expected start overflow\n");
         test_ret = -EINVAL;
         goto cleanup;
     }
+    test_ret = gb_timer_list_expect("mid-cycle-past", expected_ns, GB_TIMER_LIST_TOL_NS * 2, 0);
+    if (test_ret < 0)
+        goto cleanup;
+
+    base_max = (uint64_t)INT64_MAX - 2000000000ull;
+    if (base_max > now_ns) {
+        shape.base_time = base_max;
+        shape.cycle_time = GB_TIMER_LIST_INTERVAL_NS;
+        shape.interval_ns = GB_TIMER_LIST_INTERVAL_NS;
+        entry.interval = (uint32_t)GB_TIMER_LIST_INTERVAL_NS;
+
+        gb_nl_msg_reset(msg);
+        ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, NLM_F_REPLACE, 0, -1);
+        if (ret < 0) {
+            test_ret = ret;
+            goto cleanup;
+        }
+        ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
+        if (ret < 0) {
+            test_ret = ret;
+            goto cleanup;
+        }
+        test_ret = gb_timer_list_expect("near-max-future", base_max, GB_TIMER_LIST_TOL_NS, (uint64_t)INT64_MAX);
+        if (test_ret < 0)
+            goto cleanup;
+    }
+
+    ret = gb_clock_gettime_ns(clkid, &now_ns);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    large_cycle = (uint64_t)INT64_MAX / 4ull;
+    if (now_ns > 1000000000ull)
+        base_past = now_ns - 1000000000ull;
+    else
+        base_past = 0;
+
+    shape.base_time = base_past;
+    shape.cycle_time = large_cycle;
+    shape.interval_ns = GB_TIMER_LIST_INTERVAL_NS;
+    entry.interval = (uint32_t)GB_TIMER_LIST_INTERVAL_NS;
+
+    gb_nl_msg_reset(msg);
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, NLM_F_REPLACE, 0, -1);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+    ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+    ret = gb_calc_expected_start(now_ns, base_past, large_cycle, &expected_ns);
+    if (ret < 0) {
+        printf("large-cycle: expected start overflow\n");
+        test_ret = -EINVAL;
+        goto cleanup;
+    }
+    test_ret = gb_timer_list_expect("large-cycle", expected_ns, GB_TIMER_LIST_TOL_NS, (uint64_t)INT64_MAX);
+    if (test_ret < 0)
+        goto cleanup;
 
 cleanup:
     gb_selftest_cleanup_gate(sock, msg, resp, base_index);
