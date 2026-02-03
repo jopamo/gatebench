@@ -77,21 +77,25 @@ void gb_stats_sort(struct gb_stats* stats) {
     stats->sorted = true;
 }
 
-uint64_t gb_stats_percentile(struct gb_stats* stats, double p) {
-    if (!stats || !stats->values || stats->count == 0)
-        return 0;
+int gb_stats_percentile(struct gb_stats* stats, double p, uint64_t* out) {
+    if (!stats || !stats->values || stats->count == 0 || !out)
+        return -EINVAL;
 
     if (p < 0.0 || p > 1.0)
-        return 0;
+        return -EINVAL;
 
     if (!stats->sorted)
         gb_stats_sort(stats);
 
-    if (p <= 0.0)
-        return stats->values[0];
+    if (p <= 0.0) {
+        *out = stats->values[0];
+        return 0;
+    }
 
-    if (p >= 1.0)
-        return stats->values[stats->count - 1];
+    if (p >= 1.0) {
+        *out = stats->values[stats->count - 1];
+        return 0;
+    }
 
     {
         const double idx = p * (double)(stats->count - 1);
@@ -100,22 +104,25 @@ uint64_t gb_stats_percentile(struct gb_stats* stats, double p) {
         const size_t lo = (size_t)floor_idx;
         const size_t hi = (size_t)ceil_idx;
 
-        if (lo == hi)
-            return stats->values[lo];
+        if (lo == hi) {
+            *out = stats->values[lo];
+            return 0;
+        }
 
         {
             const double w = idx - (double)lo;
             const double a = (double)stats->values[lo];
             const double b = (double)stats->values[hi];
 
-            return (uint64_t)(a + w * (b - a));
+            *out = (uint64_t)(a + w * (b - a));
+            return 0;
         }
     }
 }
 
-double gb_stats_mean(struct gb_stats* stats) {
-    if (!stats || !stats->values || stats->count == 0)
-        return 0.0;
+int gb_stats_mean(struct gb_stats* stats, double* out) {
+    if (!stats || !stats->values || stats->count == 0 || !out)
+        return -EINVAL;
 
     {
         double sum = 0.0;
@@ -123,75 +130,72 @@ double gb_stats_mean(struct gb_stats* stats) {
         for (size_t i = 0; i < stats->count; i++)
             sum += (double)stats->values[i];
 
-        return sum / (double)stats->count;
-    }
-}
-
-double gb_stats_stddev(struct gb_stats* stats) {
-    if (!stats || !stats->values || stats->count < 2)
-        return 0.0;
-
-    {
-        const double mean = gb_stats_mean(stats);
-        double sum_sq = 0.0;
-
-        for (size_t i = 0; i < stats->count; i++) {
-            const double diff = (double)stats->values[i] - mean;
-            sum_sq += diff * diff;
-        }
-
-        return sqrt(sum_sq / (double)(stats->count - 1));
-    }
-}
-
-uint64_t gb_stats_min(struct gb_stats* stats) {
-    if (!stats || !stats->values || stats->count == 0)
+        *out = sum / (double)stats->count;
         return 0;
+    }
+}
+
+int gb_stats_stddev(struct gb_stats* stats, double* out) {
+    double mean = 0.0;
+    double sum_sq = 0.0;
+    int ret;
+
+    if (!stats || !stats->values || stats->count == 0 || !out)
+        return -EINVAL;
+
+    if (stats->count < 2) {
+        *out = 0.0;
+        return 0;
+    }
+
+    ret = gb_stats_mean(stats, &mean);
+    if (ret < 0)
+        return ret;
+
+    for (size_t i = 0; i < stats->count; i++) {
+        const double diff = (double)stats->values[i] - mean;
+        sum_sq += diff * diff;
+    }
+
+    *out = sqrt(sum_sq / (double)(stats->count - 1));
+    return 0;
+}
+
+int gb_stats_min(struct gb_stats* stats, uint64_t* out) {
+    if (!stats || !stats->values || stats->count == 0 || !out)
+        return -EINVAL;
 
     if (!stats->sorted)
         gb_stats_sort(stats);
 
-    return stats->values[0];
+    *out = stats->values[0];
+    return 0;
 }
 
-uint64_t gb_stats_max(struct gb_stats* stats) {
-    if (!stats || !stats->values || stats->count == 0)
-        return 0;
+int gb_stats_max(struct gb_stats* stats, uint64_t* out) {
+    if (!stats || !stats->values || stats->count == 0 || !out)
+        return -EINVAL;
 
     if (!stats->sorted)
         gb_stats_sort(stats);
 
-    return stats->values[stats->count - 1];
+    *out = stats->values[stats->count - 1];
+    return 0;
 }
 
-void gb_stats_calculate(struct gb_stats* stats,
-                        uint64_t* min,
-                        uint64_t* max,
-                        double* mean,
-                        double* stddev,
-                        uint64_t* p50,
-                        uint64_t* p95,
-                        uint64_t* p99,
-                        uint64_t* p999) {
-    if (!stats || !stats->values || stats->count == 0) {
-        if (min)
-            *min = 0;
-        if (max)
-            *max = 0;
-        if (mean)
-            *mean = 0.0;
-        if (stddev)
-            *stddev = 0.0;
-        if (p50)
-            *p50 = 0;
-        if (p95)
-            *p95 = 0;
-        if (p99)
-            *p99 = 0;
-        if (p999)
-            *p999 = 0;
-        return;
-    }
+int gb_stats_calculate(struct gb_stats* stats,
+                       uint64_t* min,
+                       uint64_t* max,
+                       double* mean,
+                       double* stddev,
+                       uint64_t* p50,
+                       uint64_t* p95,
+                       uint64_t* p99,
+                       uint64_t* p999) {
+    int ret;
+
+    if (!stats || !stats->values || stats->count == 0)
+        return -EINVAL;
 
     if (!stats->sorted)
         gb_stats_sort(stats);
@@ -200,62 +204,80 @@ void gb_stats_calculate(struct gb_stats* stats,
         *min = stats->values[0];
     if (max)
         *max = stats->values[stats->count - 1];
-    if (mean)
-        *mean = gb_stats_mean(stats);
-    if (stddev)
-        *stddev = gb_stats_stddev(stats);
-    if (p50)
-        *p50 = gb_stats_percentile(stats, 0.50);
-    if (p95)
-        *p95 = gb_stats_percentile(stats, 0.95);
-    if (p99)
-        *p99 = gb_stats_percentile(stats, 0.99);
-    if (p999)
-        *p999 = gb_stats_percentile(stats, 0.999);
+    if (mean) {
+        ret = gb_stats_mean(stats, mean);
+        if (ret < 0)
+            return ret;
+    }
+    if (stddev) {
+        ret = gb_stats_stddev(stats, stddev);
+        if (ret < 0)
+            return ret;
+    }
+    if (p50) {
+        ret = gb_stats_percentile(stats, 0.50, p50);
+        if (ret < 0)
+            return ret;
+    }
+    if (p95) {
+        ret = gb_stats_percentile(stats, 0.95, p95);
+        if (ret < 0)
+            return ret;
+    }
+    if (p99) {
+        ret = gb_stats_percentile(stats, 0.99, p99);
+        if (ret < 0)
+            return ret;
+    }
+    if (p999) {
+        ret = gb_stats_percentile(stats, 0.999, p999);
+        if (ret < 0)
+            return ret;
+    }
+
+    return 0;
 }
 
-double gb_stats_median_double(const double* values, size_t count) {
+int gb_stats_median_double(const double* values, size_t count, double* out) {
     double* copy;
-    double median;
 
-    if (!values || count == 0)
-        return 0.0;
+    if (!values || count == 0 || !out)
+        return -EINVAL;
 
     copy = malloc(count * sizeof(*copy));
     if (!copy)
-        return 0.0;
+        return -ENOMEM;
 
     memcpy(copy, values, count * sizeof(*copy));
     qsort(copy, count, sizeof(*copy), compare_double);
 
     if ((count & 1u) == 0u)
-        median = (copy[count / 2 - 1] + copy[count / 2]) / 2.0;
+        *out = (copy[count / 2 - 1] + copy[count / 2]) / 2.0;
     else
-        median = copy[count / 2];
+        *out = copy[count / 2];
 
     free(copy);
-    return median;
+    return 0;
 }
 
-uint64_t gb_stats_median_uint64(const uint64_t* values, size_t count) {
+int gb_stats_median_uint64(const uint64_t* values, size_t count, uint64_t* out) {
     uint64_t* copy;
-    uint64_t median;
 
-    if (!values || count == 0)
-        return 0;
+    if (!values || count == 0 || !out)
+        return -EINVAL;
 
     copy = malloc(count * sizeof(*copy));
     if (!copy)
-        return 0;
+        return -ENOMEM;
 
     memcpy(copy, values, count * sizeof(*copy));
     qsort(copy, count, sizeof(*copy), compare_u64);
 
     if ((count & 1u) == 0u)
-        median = (copy[count / 2 - 1] + copy[count / 2]) / 2;
+        *out = (copy[count / 2 - 1] + copy[count / 2]) / 2;
     else
-        median = copy[count / 2];
+        *out = copy[count / 2];
 
     free(copy);
-    return median;
+    return 0;
 }

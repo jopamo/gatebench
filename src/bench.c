@@ -1,6 +1,7 @@
 /* src/bench.c
  * Core benchmarking logic and measurement loop.
  */
+
 #include "../include/gatebench.h"
 #include "../include/gatebench_bench.h"
 #include "../include/gatebench_gate.h"
@@ -201,8 +202,10 @@ static int benchmark_single_run(struct gb_nl_sock* sock, const struct gb_config*
     if (result->secs > 0.0)
         result->ops_per_sec = ((double)cfg->iters * 2.0) / result->secs;
 
-    gb_stats_calculate(&stats, &result->min_ns, &result->max_ns, &result->mean_ns, &result->stddev_ns, &result->p50_ns,
-                       &result->p95_ns, &result->p99_ns, &result->p999_ns);
+    ret = gb_stats_calculate(&stats, &result->min_ns, &result->max_ns, &result->mean_ns, &result->stddev_ns,
+                             &result->p50_ns, &result->p95_ns, &result->p99_ns, &result->p999_ns);
+    if (ret < 0)
+        goto out;
 
     if (cfg->sample_mode) {
         result->sample_count = (uint32_t)stats.count;
@@ -278,12 +281,17 @@ int gb_bench_run(const struct gb_config* cfg, struct gb_summary* summary) {
     summary->run_count = cfg->runs;
 
     ops_array = malloc((size_t)cfg->runs * sizeof(*ops_array));
-    if (ops_array) {
-        for (uint32_t i = 0; i < cfg->runs; i++)
-            ops_array[i] = runs[i].ops_per_sec;
-        summary->median_ops_per_sec = gb_stats_median_double(ops_array, cfg->runs);
-        free(ops_array);
+    if (!ops_array) {
+        ret = -ENOMEM;
+        goto out;
     }
+    for (uint32_t i = 0; i < cfg->runs; i++)
+        ops_array[i] = runs[i].ops_per_sec;
+    ret = gb_stats_median_double(ops_array, cfg->runs, &summary->median_ops_per_sec);
+    free(ops_array);
+    ops_array = NULL;
+    if (ret < 0)
+        goto out;
 
     summary->min_ops_per_sec = runs[0].ops_per_sec;
     summary->max_ops_per_sec = runs[0].ops_per_sec;
@@ -299,24 +307,39 @@ int gb_bench_run(const struct gb_config* cfg, struct gb_summary* summary) {
     p99_array = malloc((size_t)cfg->runs * sizeof(*p99_array));
     p999_array = malloc((size_t)cfg->runs * sizeof(*p999_array));
 
-    if (p50_array && p95_array && p99_array && p999_array) {
-        for (uint32_t i = 0; i < cfg->runs; i++) {
-            p50_array[i] = runs[i].p50_ns;
-            p95_array[i] = runs[i].p95_ns;
-            p99_array[i] = runs[i].p99_ns;
-            p999_array[i] = runs[i].p999_ns;
-        }
-
-        summary->median_p50_ns = gb_stats_median_uint64(p50_array, cfg->runs);
-        summary->median_p95_ns = gb_stats_median_uint64(p95_array, cfg->runs);
-        summary->median_p99_ns = gb_stats_median_uint64(p99_array, cfg->runs);
-        summary->median_p999_ns = gb_stats_median_uint64(p999_array, cfg->runs);
+    if (!p50_array || !p95_array || !p99_array || !p999_array) {
+        ret = -ENOMEM;
+        goto out;
     }
+
+    for (uint32_t i = 0; i < cfg->runs; i++) {
+        p50_array[i] = runs[i].p50_ns;
+        p95_array[i] = runs[i].p95_ns;
+        p99_array[i] = runs[i].p99_ns;
+        p999_array[i] = runs[i].p999_ns;
+    }
+
+    ret = gb_stats_median_uint64(p50_array, cfg->runs, &summary->median_p50_ns);
+    if (ret < 0)
+        goto out;
+    ret = gb_stats_median_uint64(p95_array, cfg->runs, &summary->median_p95_ns);
+    if (ret < 0)
+        goto out;
+    ret = gb_stats_median_uint64(p99_array, cfg->runs, &summary->median_p99_ns);
+    if (ret < 0)
+        goto out;
+    ret = gb_stats_median_uint64(p999_array, cfg->runs, &summary->median_p999_ns);
+    if (ret < 0)
+        goto out;
 
     free(p50_array);
     free(p95_array);
     free(p99_array);
     free(p999_array);
+    p50_array = NULL;
+    p95_array = NULL;
+    p99_array = NULL;
+    p999_array = NULL;
 
     for (uint32_t i = 0; i < cfg->runs; i++) {
         sum += runs[i].ops_per_sec;
@@ -328,6 +351,12 @@ int gb_bench_run(const struct gb_config* cfg, struct gb_summary* summary) {
     ret = 0;
 
 out:
+    free(ops_array);
+    free(p50_array);
+    free(p95_array);
+    free(p99_array);
+    free(p999_array);
+
     if (ret < 0) {
         if (runs) {
             for (uint32_t i = 0; i < cfg->runs; i++)
