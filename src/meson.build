@@ -57,11 +57,17 @@ gatebench_headers = files(
 )
 
 # Build targets
+gatebench_link_args = []
+if get_option('b_sanitize') == 'none'
+  gatebench_link_args = ['-static']
+endif
+
 gatebench_exe = executable(
   'gatebench',
   gatebench_sources,
   include_directories: incdir,
   dependencies: [libmnl_dep, math_dep, libpcap_dep, threads_dep],
+  link_args: gatebench_link_args,
   install: true,
   install_dir: get_option('bindir'),
 )

@@ -28,8 +28,11 @@ struct gb_pcap_ctx {
 #ifdef GATEBENCH_HAVE_PCAP
 static void* pcap_thread_main(void* arg) {
     struct gb_pcap_ctx* ctx = arg;
+    int rc;
 
-    pcap_loop(ctx->handle, -1, pcap_dump, (u_char*)ctx->dumper);
+    rc = pcap_loop(ctx->handle, -1, pcap_dump, (u_char*)ctx->dumper);
+    if (rc == -1)
+        fprintf(stderr, "pcap_loop failed: %s\n", pcap_geterr(ctx->handle));
     return NULL;
 }
 

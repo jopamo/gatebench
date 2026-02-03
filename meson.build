@@ -11,12 +11,15 @@ project(
     'warning_level=2',
     'werror=true',
     'buildtype=release',
+    'default_library=static',
+    'prefer_static=true',
   ],
   meson_version: '>=0.56.0',
 )
 
 # Compiler and flags
 cc = meson.get_compiler('c')
+fs = import('fs')
 
 # Global compiler arguments
 add_project_arguments(
@@ -65,14 +68,63 @@ foreach flag : warning_flags
 endforeach
 
 # Dependencies
-libmnl_dep = dependency('libmnl', required: true)
+deps_prefix = get_option('deps_prefix')
+deps_prefix_abs = deps_prefix
+if deps_prefix != '' and not deps_prefix.startswith('/')
+  deps_prefix_abs = join_paths(meson.project_source_root(), deps_prefix)
+endif
+deps_use_local = false
+deps_inc_args = []
+deps_incdir = ''
+deps_libdir = ''
+libmnl_local_used = false
+libpcap_local_used = false
+
+if deps_prefix_abs != ''
+  if fs.is_dir(deps_prefix_abs)
+    deps_incdir = join_paths(deps_prefix_abs, 'include')
+    deps_libdir = join_paths(deps_prefix_abs, 'lib')
+    if fs.is_dir(deps_incdir) and fs.is_dir(deps_libdir)
+      deps_use_local = true
+      deps_inc_args = ['-I' + deps_incdir]
+    endif
+  endif
+endif
+
+libmnl_dep = disabler()
+if deps_use_local
+  libmnl_local = cc.find_library('mnl', dirs: [deps_libdir], required: false)
+  if libmnl_local.found()
+    libmnl_dep = declare_dependency(
+      compile_args: deps_inc_args,
+      dependencies: libmnl_local,
+    )
+    libmnl_local_used = true
+  endif
+endif
+if not libmnl_dep.found()
+  libmnl_dep = dependency('libmnl', required: true, static: true)
+endif
+
 math_dep = cc.find_library('m', required: true)
 threads_dep = dependency('threads')
 
 pcap_opt = get_option('pcap')
 libpcap_dep = disabler()
 if not pcap_opt.disabled()
-  libpcap_dep = dependency('libpcap', required: pcap_opt.enabled())
+  if deps_use_local
+    libpcap_local = cc.find_library('pcap', dirs: [deps_libdir], required: false)
+    if libpcap_local.found()
+      libpcap_dep = declare_dependency(
+        compile_args: deps_inc_args,
+        dependencies: libpcap_local,
+      )
+      libpcap_local_used = true
+    endif
+  endif
+  if not libpcap_dep.found()
+    libpcap_dep = dependency('libpcap', required: pcap_opt.enabled(), static: true)
+  endif
 endif
 if libpcap_dep.found()
   add_project_arguments('-DGATEBENCH_HAVE_PCAP', language: 'c')
@@ -129,6 +181,10 @@ summary({
 
 summary({
   'libmnl': libmnl_dep.found(),
+  'libmnl (local)': libmnl_local_used,
+  'libpcap': libpcap_dep.found(),
+  'libpcap (local)': libpcap_local_used,
+  'deps prefix': deps_use_local ? deps_prefix_abs : 'disabled',
   'math library': math_dep.found(),
 }, section: 'Dependencies')
 

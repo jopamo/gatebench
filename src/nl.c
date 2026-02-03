@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <poll.h>
+#include <limits.h>
 #include <sys/socket.h>
 
 /* Netlink socket structure */
@@ -140,6 +141,9 @@ static int parse_delaction_fcnt(const struct nlmsghdr* nlh, uint32_t* fcnt_out) 
     const struct nlattr* tb[TCA_ROOT_MAX + 1] = {NULL};
     struct nlattr* attr;
     struct nlattr* inner;
+    const struct nlattr* tab;
+    size_t tab_len;
+    int tab_len_i;
 
     if (!fcnt_out)
         return -EINVAL;
@@ -150,11 +154,24 @@ static int parse_delaction_fcnt(const struct nlmsghdr* nlh, uint32_t* fcnt_out) 
     if (!tb[TCA_ACT_TAB])
         return -ENOENT;
 
-    mnl_attr_for_each_nested(attr, tb[TCA_ACT_TAB]) {
+    tab = tb[TCA_ACT_TAB];
+    tab_len = mnl_attr_get_payload_len(tab);
+    if (tab_len > INT_MAX)
+        return -E2BIG;
+    tab_len_i = (int)tab_len;
+
+    for (attr = mnl_attr_get_payload(tab); mnl_attr_ok(attr, tab_len_i); attr = mnl_attr_next(attr)) {
         if (mnl_attr_get_type(attr) != 0)
             continue;
 
-        mnl_attr_for_each_nested(inner, attr) {
+        size_t inner_len = mnl_attr_get_payload_len(attr);
+        int inner_len_i;
+
+        if (inner_len > INT_MAX)
+            return -E2BIG;
+        inner_len_i = (int)inner_len;
+
+        for (inner = mnl_attr_get_payload(attr); mnl_attr_ok(inner, inner_len_i); inner = mnl_attr_next(inner)) {
             if (mnl_attr_get_type(inner) != TCA_FCNT)
                 continue;
             if (mnl_attr_get_payload_len(inner) < sizeof(uint32_t))
