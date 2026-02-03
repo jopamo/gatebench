@@ -23,6 +23,7 @@ extern int gb_bench_run(const struct gb_config* cfg, struct gb_summary* summary)
 static void print_environment(void) {
     struct utsname uts;
     int cpu;
+    int ret;
 
     if (uname(&uts) == 0) {
         printf("Environment:\n");
@@ -30,9 +31,12 @@ static void print_environment(void) {
     }
 
     /* Try to get current CPU */
-    cpu = sched_getcpu();
-    if (cpu >= 0) {
+    ret = gb_util_get_cpu(&cpu);
+    if (ret == 0) {
         printf("  Current CPU: %d\n", cpu);
+    }
+    else {
+        fprintf(stderr, "Failed to get current CPU: %s\n", strerror(-ret));
     }
 
     printf("  Clock source: CLOCK_MONOTONIC_RAW\n");
@@ -42,6 +46,7 @@ static void print_environment(void) {
 static void print_json_header(const struct gb_config* cfg) {
     struct utsname uts;
     int cpu;
+    int ret;
 
     printf("{\n");
     printf("  \"version\": \"0.1.0\",\n");
@@ -54,7 +59,11 @@ static void print_json_header(const struct gb_config* cfg) {
         printf("  },\n");
     }
 
-    cpu = sched_getcpu();
+    ret = gb_util_get_cpu(&cpu);
+    if (ret < 0) {
+        fprintf(stderr, "Failed to get current CPU: %s\n", strerror(-ret));
+        cpu = -1;
+    }
     printf("  \"current_cpu\": %d,\n", cpu);
 
     printf("  \"config\": {\n");

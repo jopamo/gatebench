@@ -157,29 +157,41 @@ static int benchmark_single_run(struct gb_nl_sock* sock, const struct gb_config*
     if (ret < 0 && ret != -ENOENT)
         goto out;
 
-    start_ns = gb_util_ns_now(CLOCK_MONOTONIC_RAW);
+    ret = gb_util_ns_now(&start_ns, CLOCK_MONOTONIC_RAW);
+    if (ret < 0)
+        goto out;
 
     for (uint32_t i = 0; i < cfg->iters; i++) {
         uint64_t a, b;
 
-        a = gb_util_ns_now(CLOCK_MONOTONIC_RAW);
+        ret = gb_util_ns_now(&a, CLOCK_MONOTONIC_RAW);
+        if (ret < 0)
+            goto out;
         ret = gb_nl_send_recv(sock, create_msg, resp, cfg->timeout_ms);
-        b = gb_util_ns_now(CLOCK_MONOTONIC_RAW);
         if (ret < 0 && ret != -EEXIST)
+            goto out;
+        ret = gb_util_ns_now(&b, CLOCK_MONOTONIC_RAW);
+        if (ret < 0)
             goto out;
 
         stats_add_sample(&stats, cfg, i, b - a);
 
-        a = gb_util_ns_now(CLOCK_MONOTONIC_RAW);
+        ret = gb_util_ns_now(&a, CLOCK_MONOTONIC_RAW);
+        if (ret < 0)
+            goto out;
         ret = gb_nl_send_recv(sock, replace_msg, resp, cfg->timeout_ms);
-        b = gb_util_ns_now(CLOCK_MONOTONIC_RAW);
+        if (ret < 0)
+            goto out;
+        ret = gb_util_ns_now(&b, CLOCK_MONOTONIC_RAW);
         if (ret < 0)
             goto out;
 
         stats_add_sample(&stats, cfg, i, b - a);
     }
 
-    end_ns = gb_util_ns_now(CLOCK_MONOTONIC_RAW);
+    ret = gb_util_ns_now(&end_ns, CLOCK_MONOTONIC_RAW);
+    if (ret < 0)
+        goto out;
 
     ret = gb_nl_send_recv(sock, del_msg, resp, cfg->timeout_ms);
     if (ret < 0 && ret != -ENOENT)

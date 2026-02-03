@@ -5,6 +5,7 @@
 #include "../include/gatebench_util.h"
 
 #include <errno.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <sched.h>
 #include <stdint.h>
@@ -31,9 +32,12 @@ int gb_util_pin_cpu(int cpu) {
     return 0;
 }
 
-uint64_t gb_util_ns_now(int clockid) {
+int gb_util_ns_now(uint64_t* out_ns, int clockid) {
     struct timespec ts;
     clockid_t clk = (clockid_t)clockid;
+
+    if (!out_ns)
+        return -EINVAL;
 
     switch (clk) {
         case CLOCK_MONOTONIC:
@@ -49,22 +53,41 @@ uint64_t gb_util_ns_now(int clockid) {
     }
 
     if (clock_gettime(clk, &ts) < 0)
-        return 0;
+        return -errno;
 
-    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+    *out_ns = (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+    return 0;
 }
 
 int gb_util_set_priority(int priority) {
     struct sched_param param;
+    int min_prio;
+    int max_prio;
 
     if (priority < 0)
         return 0; /* No priority change requested */
+
+    min_prio = sched_get_priority_min(SCHED_FIFO);
+    if (min_prio < 0)
+        return -errno;
+
+    max_prio = sched_get_priority_max(SCHED_FIFO);
+    if (max_prio < 0)
+        return -errno;
+
+    if (priority < min_prio || priority > max_prio)
+        return -ERANGE;
 
     memset(&param, 0, sizeof(param));
     param.sched_priority = priority;
 
     if (sched_setscheduler(0, SCHED_FIFO, &param) < 0) {
-        /* Try SCHED_RR if FIFO fails */
+        int err = errno;
+
+        if (err == EPERM)
+            return -err;
+
+        /* Try SCHED_RR if FIFO fails for non-permission errors */
         if (sched_setscheduler(0, SCHED_RR, &param) < 0)
             return -errno;
     }
@@ -72,36 +95,52 @@ int gb_util_set_priority(int priority) {
     return 0;
 }
 
-int gb_util_get_cpu(void) {
-    return sched_getcpu();
+int gb_util_get_cpu(int* out_cpu) {
+    int cpu;
+
+    if (!out_cpu)
+        return -EINVAL;
+
+    cpu = sched_getcpu();
+    if (cpu < 0)
+        return -errno;
+
+    *out_cpu = cpu;
+    return 0;
 }
 
-void gb_util_sleep_ns(uint64_t ns) {
+int gb_util_sleep_ns(uint64_t ns) {
     struct timespec req, rem;
 
     if (ns == 0)
-        return;
+        return 0;
 
     req.tv_sec = (time_t)(ns / 1000000000ULL);
     req.tv_nsec = (long)(ns % 1000000000ULL);
 
     while (nanosleep(&req, &rem) < 0) {
         if (errno != EINTR)
-            break;
+            return -errno;
         req = rem;
     }
+
+    return 0;
 }
 
 int gb_util_parse_uint64(const char* str, uint64_t* val) {
     char* endptr = NULL;
-    unsigned long long tmp;
+    uintmax_t tmp;
 
     if (!str || !val)
         return -EINVAL;
 
     errno = 0;
-    tmp = strtoull(str, &endptr, 10);
-    if (errno != 0 || endptr == str || *endptr != '\0')
+    tmp = strtoumax(str, &endptr, 10);
+    if (endptr == str || *endptr != '\0')
+        return -EINVAL;
+    if (errno == ERANGE || tmp > UINT64_MAX)
+        return -ERANGE;
+    if (errno != 0)
         return -EINVAL;
 
     *val = (uint64_t)tmp;
