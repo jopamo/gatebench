@@ -8,6 +8,9 @@
 #include <stdint.h>
 #include <time.h>
 
+/* Global limits */
+#define GB_MAX_ENTRIES 64u
+
 /* Core configuration structure */
 struct gb_config {
     /* Benchmark parameters */

@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <poll.h>
+#include <sys/socket.h>
 
 /* Netlink socket structure */
 struct gb_nl_sock {
@@ -24,6 +25,8 @@ struct gb_nl_sock {
 int gb_nl_open(struct gb_nl_sock** sock) {
     struct gb_nl_sock* s;
     struct mnl_socket* nl;
+    int fd;
+    int opt;
 
     if (!sock) {
         return -EINVAL;
@@ -42,6 +45,11 @@ int gb_nl_open(struct gb_nl_sock** sock) {
         free(s);
         return -errno;
     }
+
+    fd = mnl_socket_get_fd(nl);
+    opt = 1;
+    (void)setsockopt(fd, SOL_NETLINK, NETLINK_EXT_ACK, &opt, sizeof(opt));
+    (void)setsockopt(fd, SOL_NETLINK, NETLINK_CAP_ACK, &opt, sizeof(opt));
 
     /* Bind with automatic PID assignment */
     if (mnl_socket_bind(nl, 0, MNL_SOCKET_AUTOPID) < 0) {
