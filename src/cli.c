@@ -25,6 +25,7 @@
 #define DEFAULT_BASE_TIME 0ull
 #define DEFAULT_CYCLE_TIME 0ull
 #define DEFAULT_NLMON_IFACE "nlmon0"
+#define DEFAULT_RACE_SECONDS 30u
 
 static const char* usage_str =
     "Usage: gatebench [OPTIONS]\n"
@@ -55,6 +56,8 @@ static const char* usage_str =
     "  --dump-proof            Run RTM_GETACTION dump proof harness (default: off)\n"
     "  --pcap=PATH             Write nlmon capture to PATH (default: off)\n"
     "  --nlmon-iface=NAME      nlmon interface for capture (default: nlmon0)\n"
+    "  --race                  Run race workload mode (default: off)\n"
+    "  --seconds=NUM           Race mode duration in seconds (default: 30)\n"
     "\n"
     "Other options:\n"
     "  -h, --help              Show this help message\n"
@@ -77,6 +80,8 @@ static const struct option long_options[] = {
     {"dump-proof", no_argument, NULL, 261},
     {"pcap", required_argument, NULL, 262},
     {"nlmon-iface", required_argument, NULL, 263},
+    {"race", no_argument, NULL, 264},
+    {"seconds", required_argument, NULL, 265},
     {"json", no_argument, NULL, 'j'},
     {"help", no_argument, NULL, 'h'},
     {"version", no_argument, NULL, 'v'},
@@ -166,6 +171,8 @@ void gb_config_init(struct gb_config* cfg) {
     cfg->base_time = DEFAULT_BASE_TIME;
     cfg->cycle_time = DEFAULT_CYCLE_TIME;
     cfg->cycle_time_ext = 0;
+    cfg->race_mode = false;
+    cfg->race_seconds = DEFAULT_RACE_SECONDS;
 }
 
 void gb_config_print(const struct gb_config* cfg) {
@@ -189,6 +196,9 @@ void gb_config_print(const struct gb_config* cfg) {
         printf("  nlmon iface:        %s\n", cfg->nlmon_iface ? cfg->nlmon_iface : "(none)");
         printf("  pcap output:        %s\n", cfg->pcap_path ? cfg->pcap_path : "(disabled)");
     }
+    printf("  Race mode:          %s\n", cfg->race_mode ? "yes" : "no");
+    if (cfg->race_mode)
+        printf("  Race duration:      %u seconds\n", cfg->race_seconds);
     printf("  Clock ID:           %u\n", cfg->clockid);
     printf("  Base time:          %llu ns\n", (unsigned long long)cfg->base_time);
     printf("  Cycle time:         %llu ns\n", (unsigned long long)cfg->cycle_time);
@@ -273,6 +283,17 @@ int gb_cli_parse(int argc, char* argv[], struct gb_config* cfg) {
             case 263:
                 cfg->nlmon_iface = optarg;
                 break;
+            case 264:
+                cfg->race_mode = true;
+                break;
+            case 265:
+                if (parse_u32(optarg, &cfg->race_seconds, "seconds") < 0)
+                    return -EINVAL;
+                if (cfg->race_seconds == 0) {
+                    fprintf(stderr, "Error: seconds must be positive\n");
+                    return -EINVAL;
+                }
+                break;
             case 'h':
                 print_usage();
                 exit(0);
@@ -299,6 +320,11 @@ int gb_cli_parse(int argc, char* argv[], struct gb_config* cfg) {
 
     if (cfg->interval_ns == 0) {
         fprintf(stderr, "Error: interval must be positive\n");
+        return -EINVAL;
+    }
+
+    if (cfg->race_mode && cfg->race_seconds == 0) {
+        fprintf(stderr, "Error: seconds must be positive for race mode\n");
         return -EINVAL;
     }
 

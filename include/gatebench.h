@@ -29,6 +29,8 @@ struct gb_config {
     bool dump_proof;         /* Run dump proof harness */
     const char* pcap_path;   /* Output pcap path (nlmon capture) */
     const char* nlmon_iface; /* nlmon interface name */
+    bool race_mode;          /* Run race mode workload */
+    uint32_t race_seconds;   /* Race mode duration in seconds */
 
     /* Gate shape parameters */
 

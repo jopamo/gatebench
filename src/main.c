@@ -10,6 +10,7 @@
 #include "../include/gatebench_bench.h"
 #include "../include/gatebench_selftest.h"
 #include "../include/gatebench_proof.h"
+#include "../include/gatebench_race.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -110,7 +111,9 @@ static void print_json_header(const struct gb_config* cfg) {
         printf("    \"nlmon_iface\": null,\n");
     printf("    \"clockid\": %u,\n", cfg->clockid);
     printf("    \"base_time\": %lu,\n", cfg->base_time);
-    printf("    \"cycle_time\": %lu\n", cfg->cycle_time);
+    printf("    \"cycle_time\": %lu,\n", cfg->cycle_time);
+    printf("    \"race_mode\": %s,\n", cfg->race_mode ? "true" : "false");
+    printf("    \"race_seconds\": %u\n", cfg->race_seconds);
     printf("  },\n");
 }
 
@@ -139,24 +142,40 @@ int main(int argc, char* argv[]) {
         print_json_header(&cfg);
     }
 
-    /* Open netlink socket */
-    ret = gb_nl_open(&sock);
-    if (ret < 0) {
-        fprintf(stderr, "Failed to open netlink socket: %s\n", strerror(-ret));
-        return EXIT_FAILURE;
-    }
-
     /* Pin CPU if requested */
     if (cfg.cpu >= 0) {
         ret = gb_util_pin_cpu(cfg.cpu);
         if (ret < 0) {
             fprintf(stderr, "Failed to pin CPU: %s\n", strerror(-ret));
-            gb_nl_close(sock);
             return EXIT_FAILURE;
         }
         if (!cfg.json) {
             printf("Pinned to CPU %d\n\n", cfg.cpu);
         }
+    }
+
+    if (cfg.race_mode) {
+        if (!cfg.json) {
+            printf("Running race mode for %u seconds...\n", cfg.race_seconds);
+        }
+
+        ret = gb_race_run(&cfg);
+        if (ret < 0) {
+            fprintf(stderr, "Race mode failed: %s (%d)\n", strerror(-ret), ret);
+        }
+
+        if (cfg.json) {
+            print_json_footer();
+        }
+
+        return ret < 0 ? EXIT_FAILURE : EXIT_SUCCESS;
+    }
+
+    /* Open netlink socket */
+    ret = gb_nl_open(&sock);
+    if (ret < 0) {
+        fprintf(stderr, "Failed to open netlink socket: %s\n", strerror(-ret));
+        return EXIT_FAILURE;
     }
 
     /* Run selftests before benchmark */
