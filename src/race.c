@@ -12,6 +12,7 @@
 #include <linux/netlink.h>
 #include <limits.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -28,6 +29,7 @@
 #define RACE_ERRNO_MAX 4096u
 #define RACE_EXTACK_MSG_MAX 128u
 #define RACE_EXTACK_SLOTS 6u
+#define RACE_THREAD_COUNT 4u
 
 #ifndef NLM_F_ACK_TLVS
 #define NLM_F_ACK_TLVS 0x200
@@ -55,6 +57,7 @@ struct gb_race_nl_ctx {
     uint32_t max_entries;
     uint32_t interval_max;
     int timeout_ms;
+    int cpu;
     uint64_t ops;
     uint64_t errors;
     uint64_t err_counts[RACE_ERRNO_MAX];
@@ -66,6 +69,7 @@ struct gb_race_dump_ctx {
     atomic_bool* stop;
     uint32_t index;
     int timeout_ms;
+    int cpu;
     uint64_t ops;
     uint64_t errors;
     uint64_t err_counts[RACE_ERRNO_MAX];
@@ -75,6 +79,7 @@ struct gb_race_dump_ctx {
 struct gb_race_traffic_ctx {
     atomic_bool* stop;
     uint32_t seed;
+    int cpu;
     uint64_t ops;
     uint64_t errors;
     uint64_t err_counts[RACE_ERRNO_MAX];
@@ -284,6 +289,52 @@ static void race_print_extack(const char* label, const struct gb_race_extack_sta
         printf("    (other): %llu\n", (unsigned long long)stats->other);
 }
 
+static int race_collect_cpus(int* cpus, int max) {
+    cpu_set_t set;
+    long nproc;
+    int count = 0;
+
+    if (!cpus || max <= 0)
+        return 0;
+
+    if (sched_getaffinity(0, sizeof(set), &set) == 0) {
+        for (int cpu = 0; cpu < CPU_SETSIZE && count < max; cpu++) {
+            if (CPU_ISSET(cpu, &set))
+                cpus[count++] = cpu;
+        }
+        if (count > 0)
+            return count;
+    }
+
+    nproc = sysconf(_SC_NPROCESSORS_ONLN);
+    if (nproc <= 0)
+        return 0;
+
+    if (nproc > max)
+        nproc = max;
+
+    for (int i = 0; i < nproc; i++)
+        cpus[i] = i;
+
+    return (int)nproc;
+}
+
+static void race_pin_thread(const char* label, int cpu) {
+    cpu_set_t set;
+    int ret;
+
+    if (cpu < 0)
+        return;
+
+    CPU_ZERO(&set);
+    CPU_SET((unsigned)cpu, &set);
+
+    ret = pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+    if (ret != 0) {
+        fprintf(stderr, "Race: failed to pin %s thread to CPU %d: %s\n", label ? label : "unknown", cpu, strerror(ret));
+    }
+}
+
 static int32_t race_random_maxoctets(uint32_t* seed) {
     if (rng_range(seed, 4u) == 0u)
         return -1;
@@ -329,6 +380,8 @@ static void* race_replace_thread(void* arg) {
     struct gate_shape shape;
     size_t cap;
     int ret;
+
+    race_pin_thread("replace", ctx->cpu);
 
     ret = gb_nl_open(&sock);
     if (ret < 0) {
@@ -387,6 +440,8 @@ static void* race_dump_thread(void* arg) {
     struct gb_dump_stats stats;
     int ret;
 
+    race_pin_thread("dump", ctx->cpu);
+
     ret = gb_nl_open(&sock);
     if (ret < 0) {
         race_record_err(&ctx->errors, ctx->err_counts, ret);
@@ -435,6 +490,8 @@ static void* race_delete_thread(void* arg) {
     struct gate_shape shape;
     size_t create_cap;
     int ret;
+
+    race_pin_thread("delete", ctx->cpu);
 
     ret = gb_nl_open(&sock);
     if (ret < 0) {
@@ -507,6 +564,8 @@ static void* race_traffic_thread(void* arg) {
     struct timeval tv;
     ssize_t ret;
 
+    race_pin_thread("traffic", ctx->cpu);
+
     fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) {
         race_record_err(&ctx->errors, ctx->err_counts, -errno);
@@ -555,6 +614,8 @@ int gb_race_run(const struct gb_config* cfg) {
     pthread_t dump_thread;
     pthread_t delete_thread;
     pthread_t traffic_thread;
+    int cpus[RACE_THREAD_COUNT];
+    int cpu_count;
     uint32_t base_interval;
     uint32_t interval_max;
     uint32_t max_entries;
@@ -581,6 +642,13 @@ int gb_race_run(const struct gb_config* cfg) {
     else
         interval_max = UINT32_MAX;
 
+    cpu_count = race_collect_cpus(cpus, (int)RACE_THREAD_COUNT);
+    if (cpu_count <= 0) {
+        for (unsigned int i = 0; i < RACE_THREAD_COUNT; i++)
+            cpus[i] = -1;
+        cpu_count = 0;
+    }
+
     replace_ctx = (struct gb_race_nl_ctx){
         .cfg = cfg,
         .stop = &stop,
@@ -589,6 +657,7 @@ int gb_race_run(const struct gb_config* cfg) {
         .max_entries = max_entries,
         .interval_max = interval_max,
         .timeout_ms = cfg->timeout_ms,
+        .cpu = cpu_count > 0 ? cpus[0 % cpu_count] : -1,
         .ops = 0,
         .errors = 0,
     };
@@ -598,6 +667,7 @@ int gb_race_run(const struct gb_config* cfg) {
         .stop = &stop,
         .index = cfg->index,
         .timeout_ms = cfg->timeout_ms,
+        .cpu = cpu_count > 0 ? cpus[1 % cpu_count] : -1,
         .ops = 0,
         .errors = 0,
     };
@@ -610,6 +680,7 @@ int gb_race_run(const struct gb_config* cfg) {
         .max_entries = max_entries,
         .interval_max = interval_max,
         .timeout_ms = cfg->timeout_ms,
+        .cpu = cpu_count > 0 ? cpus[3 % cpu_count] : -1,
         .ops = 0,
         .errors = 0,
     };
@@ -617,9 +688,19 @@ int gb_race_run(const struct gb_config* cfg) {
     traffic_ctx = (struct gb_race_traffic_ctx){
         .stop = &stop,
         .seed = RACE_SEED_BASE ^ 0x77777777u,
+        .cpu = cpu_count > 0 ? cpus[2 % cpu_count] : -1,
         .ops = 0,
         .errors = 0,
     };
+
+    if (!cfg->json) {
+        if (cpu_count < (int)RACE_THREAD_COUNT) {
+            printf("Note: only %d CPU%s available; race threads will share CPUs\n", cpu_count,
+                   cpu_count == 1 ? "" : "s");
+        }
+        printf("Race thread CPUs: replace=%d dump=%d traffic=%d delete=%d\n", replace_ctx.cpu, dump_ctx.cpu,
+               traffic_ctx.cpu, delete_ctx.cpu);
+    }
 
     ret = pthread_create(&replace_thread, NULL, race_replace_thread, &replace_ctx);
     if (ret != 0)
