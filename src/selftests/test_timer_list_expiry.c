@@ -128,10 +128,11 @@ static int gb_timer_list_find_gate(uint64_t expected_ns,
     return 0;
 }
 
-static int gb_timer_list_expect(const char* label,
-                                uint64_t expected_ns,
-                                uint64_t tolerance_ns,
-                                uint64_t max_allowed_ns) {
+static int gb_timer_list_expect_found(const char* label,
+                                      uint64_t expected_ns,
+                                      uint64_t tolerance_ns,
+                                      uint64_t max_allowed_ns,
+                                      uint64_t* found_hard_out) {
     struct timespec req = {0};
     uint64_t found_expiry = 0;
     uint64_t found_soft = 0;
@@ -189,7 +190,17 @@ static int gb_timer_list_expect(const char* label,
         return -EINVAL;
     }
 
+    if (found_hard_out)
+        *found_hard_out = found_expiry;
+
     return 0;
+}
+
+static int gb_timer_list_expect(const char* label,
+                                uint64_t expected_ns,
+                                uint64_t tolerance_ns,
+                                uint64_t max_allowed_ns) {
+    return gb_timer_list_expect_found(label, expected_ns, tolerance_ns, max_allowed_ns, NULL);
 }
 
 static int gb_calc_expected_start(uint64_t now_ns, uint64_t base_ns, uint64_t cycle_ns, uint64_t* out_ns) {
@@ -233,6 +244,12 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
     uint64_t base_max = 0;
     uint64_t large_cycle = 0;
     uint64_t baseline_cycle = 0;
+    uint64_t clamp_base = 0;
+    uint64_t clamp_cycle_old = GB_TIMER_LIST_INTERVAL_NS;
+    uint64_t clamp_cycle_new = GB_TIMER_LIST_INTERVAL_NS * 4ull;
+    uint64_t clamp_expected_old = 0;
+    uint64_t clamp_expected_new = 0;
+    uint64_t clamp_old_expiry = 0;
     clockid_t clkid = CLOCK_TAI;
     int ret;
     int test_ret = 0;
@@ -337,6 +354,87 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
     printf("replace-forward: base_old=%llu base_new=%llu cycle=%llu interval=%u\n", (unsigned long long)base_old,
            (unsigned long long)base_new, (unsigned long long)shape.cycle_time, entry.interval);
     test_ret = gb_timer_list_expect("replace-forward", base_new, GB_TIMER_LIST_TOL_NS, 0);
+    if (test_ret < 0)
+        goto cleanup;
+
+    ret = gb_clock_gettime_ns(clkid, &now_ns);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    if (now_ns > (GB_TIMER_LIST_INTERVAL_NS * 2ull))
+        clamp_base = now_ns - (GB_TIMER_LIST_INTERVAL_NS * 2ull);
+    else
+        clamp_base = 0;
+
+    shape.base_time = clamp_base;
+    shape.cycle_time = clamp_cycle_old;
+    shape.interval_ns = clamp_cycle_old;
+    shape.entries = 1;
+    entry.interval = (uint32_t)clamp_cycle_old;
+
+    gb_nl_msg_reset(msg);
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, NLM_F_REPLACE, 0, -1);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+    ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    ret = gb_calc_expected_start(now_ns, clamp_base, clamp_cycle_old, &clamp_expected_old);
+    if (ret < 0) {
+        printf("active-clamp-old: expected start overflow\n");
+        test_ret = -EINVAL;
+        goto cleanup;
+    }
+
+    printf("active-clamp-old: now=%llu base=%llu cycle=%llu interval=%u\n", (unsigned long long)now_ns,
+           (unsigned long long)clamp_base, (unsigned long long)clamp_cycle_old, entry.interval);
+    test_ret = gb_timer_list_expect_found("active-clamp-old", clamp_expected_old, GB_TIMER_LIST_TOL_NS * 2, 0,
+                                          &clamp_old_expiry);
+    if (test_ret < 0)
+        goto cleanup;
+
+    ret = gb_clock_gettime_ns(clkid, &now_ns);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    shape.base_time = clamp_base;
+    shape.cycle_time = clamp_cycle_new;
+    shape.interval_ns = clamp_cycle_new;
+    shape.entries = 1;
+    entry.interval = (uint32_t)clamp_cycle_new;
+
+    gb_nl_msg_reset(msg);
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, NLM_F_REPLACE, 0, -1);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+    ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    ret = gb_calc_expected_start(now_ns, clamp_base, clamp_cycle_new, &clamp_expected_new);
+    if (ret < 0) {
+        printf("active-clamp-new: expected start overflow\n");
+        test_ret = -EINVAL;
+        goto cleanup;
+    }
+
+    printf("active-clamp-new: now=%llu base=%llu cycle=%llu interval=%u expected_new=%llu old_expiry=%llu\n",
+           (unsigned long long)now_ns, (unsigned long long)clamp_base, (unsigned long long)clamp_cycle_new,
+           entry.interval, (unsigned long long)clamp_expected_new, (unsigned long long)clamp_old_expiry);
+    test_ret = gb_timer_list_expect("active-clamp-new", clamp_old_expiry, GB_TIMER_LIST_TOL_NS * 2, 0);
     if (test_ret < 0)
         goto cleanup;
 
