@@ -26,10 +26,12 @@
 #define RACE_SEED_BASE 0x5a17c3d1u
 #define RACE_MIN_PKT 64u
 #define RACE_MAX_PKT 1500u
+#define RACE_INVALID_INTERVAL_NS 1000000u
 #define RACE_ERRNO_MAX 4096u
 #define RACE_EXTACK_MSG_MAX 128u
 #define RACE_EXTACK_SLOTS 6u
-#define RACE_THREAD_COUNT 4u
+#define RACE_INVALID_CASES 7u
+#define RACE_THREAD_COUNT 5u
 
 #ifndef NLM_F_ACK_TLVS
 #define NLM_F_ACK_TLVS 0x200
@@ -83,6 +85,19 @@ struct gb_race_traffic_ctx {
     uint64_t ops;
     uint64_t errors;
     uint64_t err_counts[RACE_ERRNO_MAX];
+};
+
+struct gb_race_invalid_ctx {
+    const struct gb_config* cfg;
+    atomic_bool* stop;
+    uint32_t seed;
+    uint32_t index;
+    int timeout_ms;
+    int cpu;
+    uint64_t ops;
+    uint64_t errors;
+    uint64_t err_counts[RACE_ERRNO_MAX];
+    struct gb_race_extack_stats extack;
 };
 
 static uint32_t rng_next(uint32_t* state) {
@@ -351,6 +366,204 @@ static void race_shape_init(struct gate_shape* shape, const struct gb_config* cf
     shape->entries = cfg->entries > GB_MAX_ENTRIES ? GB_MAX_ENTRIES : cfg->entries;
 }
 
+static struct nlmsghdr* race_gate_nlmsg_start(struct gb_nl_msg* msg,
+                                              uint16_t flags,
+                                              uint32_t index,
+                                              struct nlattr** nest_tab,
+                                              struct nlattr** nest_prio,
+                                              struct nlattr** nest_opts) {
+    struct nlmsghdr* nlh = mnl_nlmsg_put_header(msg->buf);
+    struct tcamsg* tca;
+
+    nlh->nlmsg_type = RTM_NEWACTION;
+    nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | flags;
+
+    tca = mnl_nlmsg_put_extra_header(nlh, sizeof(*tca));
+    memset(tca, 0, sizeof(*tca));
+    tca->tca_family = AF_UNSPEC;
+
+    *nest_tab = mnl_attr_nest_start(nlh, TCA_ACT_TAB);
+    *nest_prio = mnl_attr_nest_start(nlh, GATEBENCH_ACT_PRIO);
+    mnl_attr_put_str(nlh, TCA_ACT_KIND, "gate");
+    mnl_attr_put_u32(nlh, TCA_ACT_INDEX, index);
+    *nest_opts = mnl_attr_nest_start(nlh, TCA_OPTIONS);
+
+    return nlh;
+}
+
+static void race_gate_nlmsg_end(struct gb_nl_msg* msg,
+                                struct nlmsghdr* nlh,
+                                struct nlattr* nest_tab,
+                                struct nlattr* nest_prio,
+                                struct nlattr* nest_opts) {
+    mnl_attr_nest_end(nlh, nest_opts);
+    mnl_attr_nest_end(nlh, nest_prio);
+    mnl_attr_nest_end(nlh, nest_tab);
+    msg->len = nlh->nlmsg_len;
+}
+
+static int race_send_bad_clockid(struct gb_nl_sock* sock,
+                                 struct gb_nl_msg* msg,
+                                 struct gb_nl_msg* resp,
+                                 uint32_t index,
+                                 int timeout_ms) {
+    struct nlmsghdr* nlh;
+    struct nlattr *nest_tab, *nest_prio, *nest_opts;
+    struct tc_gate gate_params;
+
+    gb_nl_msg_reset(msg);
+    nlh = race_gate_nlmsg_start(msg, NLM_F_CREATE | NLM_F_EXCL, index, &nest_tab, &nest_prio, &nest_opts);
+
+    memset(&gate_params, 0, sizeof(gate_params));
+    gate_params.index = index;
+    gate_params.action = TC_ACT_PIPE;
+    mnl_attr_put(nlh, TCA_GATE_PARMS, sizeof(gate_params), &gate_params);
+
+    /* Wrong size for CLOCKID: u64 instead of u32 */
+    mnl_attr_put_u64(nlh, TCA_GATE_CLOCKID, CLOCK_TAI);
+    mnl_attr_put_u64(nlh, TCA_GATE_BASE_TIME, 0);
+    mnl_attr_put_u64(nlh, TCA_GATE_CYCLE_TIME, RACE_INVALID_INTERVAL_NS);
+
+    race_gate_nlmsg_end(msg, nlh, nest_tab, nest_prio, nest_opts);
+    return gb_nl_send_recv(sock, msg, resp, timeout_ms);
+}
+
+static int race_send_bad_base_time(struct gb_nl_sock* sock,
+                                   struct gb_nl_msg* msg,
+                                   struct gb_nl_msg* resp,
+                                   uint32_t index,
+                                   int timeout_ms) {
+    struct nlmsghdr* nlh;
+    struct nlattr *nest_tab, *nest_prio, *nest_opts;
+    struct tc_gate gate_params;
+
+    gb_nl_msg_reset(msg);
+    nlh = race_gate_nlmsg_start(msg, NLM_F_CREATE | NLM_F_EXCL, index, &nest_tab, &nest_prio, &nest_opts);
+
+    memset(&gate_params, 0, sizeof(gate_params));
+    gate_params.index = index;
+    gate_params.action = TC_ACT_PIPE;
+    mnl_attr_put(nlh, TCA_GATE_PARMS, sizeof(gate_params), &gate_params);
+
+    mnl_attr_put_u32(nlh, TCA_GATE_CLOCKID, CLOCK_TAI);
+    /* Wrong size for BASE_TIME: u32 instead of u64 */
+    mnl_attr_put_u32(nlh, TCA_GATE_BASE_TIME, 0);
+    mnl_attr_put_u64(nlh, TCA_GATE_CYCLE_TIME, RACE_INVALID_INTERVAL_NS);
+
+    race_gate_nlmsg_end(msg, nlh, nest_tab, nest_prio, nest_opts);
+    return gb_nl_send_recv(sock, msg, resp, timeout_ms);
+}
+
+static int race_send_bad_cycle_time(struct gb_nl_sock* sock,
+                                    struct gb_nl_msg* msg,
+                                    struct gb_nl_msg* resp,
+                                    uint32_t index,
+                                    int timeout_ms) {
+    struct nlmsghdr* nlh;
+    struct nlattr *nest_tab, *nest_prio, *nest_opts;
+    struct tc_gate gate_params;
+
+    gb_nl_msg_reset(msg);
+    nlh = race_gate_nlmsg_start(msg, NLM_F_CREATE | NLM_F_EXCL, index, &nest_tab, &nest_prio, &nest_opts);
+
+    memset(&gate_params, 0, sizeof(gate_params));
+    gate_params.index = index;
+    gate_params.action = TC_ACT_PIPE;
+    mnl_attr_put(nlh, TCA_GATE_PARMS, sizeof(gate_params), &gate_params);
+
+    mnl_attr_put_u32(nlh, TCA_GATE_CLOCKID, CLOCK_TAI);
+    mnl_attr_put_u64(nlh, TCA_GATE_BASE_TIME, 0);
+    /* Wrong size for CYCLE_TIME: u32 instead of u64 */
+    mnl_attr_put_u32(nlh, TCA_GATE_CYCLE_TIME, RACE_INVALID_INTERVAL_NS);
+
+    race_gate_nlmsg_end(msg, nlh, nest_tab, nest_prio, nest_opts);
+    return gb_nl_send_recv(sock, msg, resp, timeout_ms);
+}
+
+static int race_send_invalid_action(struct gb_nl_sock* sock,
+                                    struct gb_nl_msg* msg,
+                                    struct gb_nl_msg* resp,
+                                    uint32_t index,
+                                    int timeout_ms) {
+    struct nlmsghdr* nlh;
+    struct nlattr *nest_tab, *nest_prio, *nest_opts;
+    struct tc_gate gate_params;
+
+    gb_nl_msg_reset(msg);
+    nlh = race_gate_nlmsg_start(msg, NLM_F_CREATE | NLM_F_EXCL, index, &nest_tab, &nest_prio, &nest_opts);
+
+    memset(&gate_params, 0, sizeof(gate_params));
+    gate_params.index = index;
+    gate_params.action = 0x7fffffff;
+    mnl_attr_put(nlh, TCA_GATE_PARMS, sizeof(gate_params), &gate_params);
+
+    mnl_attr_put_u32(nlh, TCA_GATE_CLOCKID, CLOCK_TAI);
+    mnl_attr_put_u64(nlh, TCA_GATE_BASE_TIME, 0);
+    mnl_attr_put_u64(nlh, TCA_GATE_CYCLE_TIME, RACE_INVALID_INTERVAL_NS);
+
+    race_gate_nlmsg_end(msg, nlh, nest_tab, nest_prio, nest_opts);
+    return gb_nl_send_recv(sock, msg, resp, timeout_ms);
+}
+
+static int race_send_invalid_entry_attr(struct gb_nl_sock* sock,
+                                        struct gb_nl_msg* msg,
+                                        struct gb_nl_msg* resp,
+                                        uint32_t index,
+                                        uint32_t which,
+                                        int timeout_ms) {
+    struct nlmsghdr* nlh;
+    struct nlattr *nest_tab, *nest_prio, *nest_opts, *entry_list, *entry_nest;
+    struct tc_gate gate_params;
+    uint32_t interval = RACE_INVALID_INTERVAL_NS;
+
+    gb_nl_msg_reset(msg);
+    nlh = race_gate_nlmsg_start(msg, NLM_F_CREATE | NLM_F_EXCL, index, &nest_tab, &nest_prio, &nest_opts);
+
+    memset(&gate_params, 0, sizeof(gate_params));
+    gate_params.index = index;
+    gate_params.action = TC_ACT_PIPE;
+    mnl_attr_put(nlh, TCA_GATE_PARMS, sizeof(gate_params), &gate_params);
+
+    mnl_attr_put_u32(nlh, TCA_GATE_CLOCKID, CLOCK_TAI);
+    mnl_attr_put_u64(nlh, TCA_GATE_BASE_TIME, 0);
+    mnl_attr_put_u64(nlh, TCA_GATE_CYCLE_TIME, interval);
+
+    entry_list = mnl_attr_nest_start(nlh, TCA_GATE_ENTRY_LIST);
+    entry_nest = mnl_attr_nest_start(nlh, TCA_GATE_ONE_ENTRY);
+
+    switch (which) {
+        case 0: {
+            size_t before = nlh->nlmsg_len;
+            mnl_attr_put_u32(nlh, TCA_GATE_ENTRY_INTERVAL, interval);
+            struct nlattr* attr = (struct nlattr*)((char*)nlh + before);
+            attr->nla_len = NLA_HDRLEN + 1;
+            break;
+        }
+        case 1: {
+            mnl_attr_put_u32(nlh, TCA_GATE_ENTRY_INTERVAL, interval);
+            size_t before = nlh->nlmsg_len;
+            mnl_attr_put_u32(nlh, TCA_GATE_ENTRY_IPV, 0);
+            struct nlattr* attr = (struct nlattr*)((char*)nlh + before);
+            attr->nla_len = NLA_HDRLEN + 1;
+            break;
+        }
+        default: {
+            mnl_attr_put_u32(nlh, TCA_GATE_ENTRY_INTERVAL, interval);
+            size_t before = nlh->nlmsg_len;
+            mnl_attr_put_u32(nlh, TCA_GATE_ENTRY_MAX_OCTETS, 0);
+            struct nlattr* attr = (struct nlattr*)((char*)nlh + before);
+            attr->nla_len = NLA_HDRLEN + 1;
+            break;
+        }
+    }
+
+    mnl_attr_nest_end(nlh, entry_nest);
+    mnl_attr_nest_end(nlh, entry_list);
+
+    race_gate_nlmsg_end(msg, nlh, nest_tab, nest_prio, nest_opts);
+    return gb_nl_send_recv(sock, msg, resp, timeout_ms);
+}
+
 static uint32_t race_fill_entries(struct gate_entry* entries,
                                   uint32_t max_entries,
                                   uint32_t interval_max,
@@ -604,21 +817,103 @@ static void* race_traffic_thread(void* arg) {
     return NULL;
 }
 
+static void* race_invalid_thread(void* arg) {
+    struct gb_race_invalid_ctx* ctx = arg;
+    struct gb_nl_sock* sock = NULL;
+    struct gb_nl_msg* msg = NULL;
+    struct gb_nl_msg* resp = NULL;
+    struct gb_nl_msg* del_msg = NULL;
+    uint32_t base_index;
+    int ret;
+
+    race_pin_thread("invalid", ctx->cpu);
+
+    ret = gb_nl_open(&sock);
+    if (ret < 0) {
+        race_record_err(&ctx->errors, ctx->err_counts, ret);
+        return NULL;
+    }
+
+    msg = gb_nl_msg_alloc(2048u);
+    resp = gb_nl_msg_alloc((size_t)MNL_SOCKET_BUFFER_SIZE);
+    del_msg = gb_nl_msg_alloc(1024u);
+    if (!msg || !resp || !del_msg) {
+        race_record_err(&ctx->errors, ctx->err_counts, -ENOMEM);
+        goto out;
+    }
+
+    base_index = ctx->index;
+
+    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed)) {
+        uint32_t which = ctx->seed++ % RACE_INVALID_CASES;
+        uint32_t index = base_index + which;
+
+        switch (which) {
+            case 0:
+                ret = race_send_bad_clockid(sock, msg, resp, index, ctx->timeout_ms);
+                break;
+            case 1:
+                ret = race_send_bad_base_time(sock, msg, resp, index, ctx->timeout_ms);
+                break;
+            case 2:
+                ret = race_send_bad_cycle_time(sock, msg, resp, index, ctx->timeout_ms);
+                break;
+            case 3:
+                ret = race_send_invalid_action(sock, msg, resp, index, ctx->timeout_ms);
+                break;
+            case 4:
+                ret = race_send_invalid_entry_attr(sock, msg, resp, index, 0, ctx->timeout_ms);
+                break;
+            case 5:
+                ret = race_send_invalid_entry_attr(sock, msg, resp, index, 1, ctx->timeout_ms);
+                break;
+            default:
+                ret = race_send_invalid_entry_attr(sock, msg, resp, index, 2, ctx->timeout_ms);
+                break;
+        }
+
+        if (ret < 0)
+            race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
+        else {
+            gb_nl_msg_reset(del_msg);
+            if (build_gate_delaction(del_msg, index) >= 0)
+                (void)gb_nl_send_recv(sock, del_msg, resp, ctx->timeout_ms);
+        }
+
+        ctx->ops++;
+        if ((ctx->ops & 0xffu) == 0u)
+            usleep(100);
+    }
+
+out:
+    if (msg)
+        gb_nl_msg_free(msg);
+    if (resp)
+        gb_nl_msg_free(resp);
+    if (del_msg)
+        gb_nl_msg_free(del_msg);
+    gb_nl_close(sock);
+    return NULL;
+}
+
 int gb_race_run(const struct gb_config* cfg) {
     atomic_bool stop = ATOMIC_VAR_INIT(false);
     struct gb_race_nl_ctx replace_ctx;
     struct gb_race_dump_ctx dump_ctx;
     struct gb_race_nl_ctx delete_ctx;
     struct gb_race_traffic_ctx traffic_ctx;
+    struct gb_race_invalid_ctx invalid_ctx;
     pthread_t replace_thread;
     pthread_t dump_thread;
     pthread_t delete_thread;
     pthread_t traffic_thread;
+    pthread_t invalid_thread;
     int cpus[RACE_THREAD_COUNT];
     int cpu_count;
     uint32_t base_interval;
     uint32_t interval_max;
     uint32_t max_entries;
+    uint32_t invalid_base;
     uint64_t sleep_ns;
     int ret;
     int created = 0;
@@ -641,6 +936,10 @@ int gb_race_run(const struct gb_config* cfg) {
         interval_max = base_interval * 2u;
     else
         interval_max = UINT32_MAX;
+
+    invalid_base = cfg->index + 0x10000u;
+    if (invalid_base < cfg->index)
+        invalid_base = cfg->index;
 
     cpu_count = race_collect_cpus(cpus, (int)RACE_THREAD_COUNT);
     if (cpu_count <= 0) {
@@ -693,13 +992,24 @@ int gb_race_run(const struct gb_config* cfg) {
         .errors = 0,
     };
 
+    invalid_ctx = (struct gb_race_invalid_ctx){
+        .cfg = cfg,
+        .stop = &stop,
+        .seed = RACE_SEED_BASE ^ 0x99999999u,
+        .index = invalid_base,
+        .timeout_ms = cfg->timeout_ms,
+        .cpu = cpu_count > 0 ? cpus[4 % cpu_count] : -1,
+        .ops = 0,
+        .errors = 0,
+    };
+
     if (!cfg->json) {
         if (cpu_count < (int)RACE_THREAD_COUNT) {
             printf("Note: only %d CPU%s available; race threads will share CPUs\n", cpu_count,
                    cpu_count == 1 ? "" : "s");
         }
-        printf("Race thread CPUs: replace=%d dump=%d traffic=%d delete=%d\n", replace_ctx.cpu, dump_ctx.cpu,
-               traffic_ctx.cpu, delete_ctx.cpu);
+        printf("Race thread CPUs: replace=%d dump=%d traffic=%d delete=%d invalid=%d\n", replace_ctx.cpu, dump_ctx.cpu,
+               traffic_ctx.cpu, delete_ctx.cpu, invalid_ctx.cpu);
     }
 
     ret = pthread_create(&replace_thread, NULL, race_replace_thread, &replace_ctx);
@@ -722,6 +1032,11 @@ int gb_race_run(const struct gb_config* cfg) {
         goto out_stop;
     created++;
 
+    ret = pthread_create(&invalid_thread, NULL, race_invalid_thread, &invalid_ctx);
+    if (ret != 0)
+        goto out_stop;
+    created++;
+
     sleep_ns = (uint64_t)cfg->race_seconds * 1000000000ull;
     (void)gb_util_sleep_ns(sleep_ns);
 
@@ -736,6 +1051,8 @@ out_stop:
         pthread_join(traffic_thread, NULL);
     if (created > 3)
         pthread_join(delete_thread, NULL);
+    if (created > 4)
+        pthread_join(invalid_thread, NULL);
 
     if (!cfg->json) {
         if (ret == 0) {
@@ -752,13 +1069,17 @@ out_stop:
                (unsigned long long)traffic_ctx.errors);
         printf("  Delete ops:  %llu, errors: %llu\n", (unsigned long long)delete_ctx.ops,
                (unsigned long long)delete_ctx.errors);
+        printf("  Invalid ops: %llu, errors: %llu\n", (unsigned long long)invalid_ctx.ops,
+               (unsigned long long)invalid_ctx.errors);
         race_print_err_breakdown("Replace", replace_ctx.errors, replace_ctx.err_counts);
         race_print_err_breakdown("Dump", dump_ctx.errors, dump_ctx.err_counts);
         race_print_err_breakdown("Traffic", traffic_ctx.errors, traffic_ctx.err_counts);
         race_print_err_breakdown("Delete", delete_ctx.errors, delete_ctx.err_counts);
+        race_print_err_breakdown("Invalid", invalid_ctx.errors, invalid_ctx.err_counts);
         race_print_extack("Replace", &replace_ctx.extack);
         race_print_extack("Dump", &dump_ctx.extack);
         race_print_extack("Delete", &delete_ctx.extack);
+        race_print_extack("Invalid", &invalid_ctx.extack);
     }
 
     if (ret != 0)

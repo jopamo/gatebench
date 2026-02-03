@@ -25,7 +25,7 @@
 #define DEFAULT_BASE_TIME 0ull
 #define DEFAULT_CYCLE_TIME 0ull
 #define DEFAULT_NLMON_IFACE "nlmon0"
-#define DEFAULT_RACE_SECONDS 30u
+#define DEFAULT_RACE_SECONDS 60u
 
 static const char* usage_str =
     "Usage: gatebench [OPTIONS]\n"
@@ -56,8 +56,8 @@ static const char* usage_str =
     "  --dump-proof            Run RTM_GETACTION dump proof harness (default: off)\n"
     "  --pcap=PATH             Write nlmon capture to PATH (default: off)\n"
     "  --nlmon-iface=NAME      nlmon interface for capture (default: nlmon0)\n"
-    "  --race                  Run race workload mode (default: off)\n"
-    "  --seconds=NUM           Race mode duration in seconds (default: 30)\n"
+    "  --race                  Run race workload mode (default: off; includes invalid input thread)\n"
+    "  --seconds=NUM           Race mode duration in seconds (default: 60)\n"
     "\n"
     "Other options:\n"
     "  -h, --help              Show this help message\n"
