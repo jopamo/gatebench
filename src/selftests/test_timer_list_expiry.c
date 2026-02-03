@@ -2,6 +2,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define GB_TIMER_LIST_PATH "/proc/timer_list"
@@ -57,8 +58,43 @@ static uint64_t gb_fill_baseline_entries(struct gate_entry* entries, uint32_t co
     return cycle;
 }
 
+static uint64_t gb_parse_timer_ptr(const char* line) {
+    const char* lt = NULL;
+    const char* gt = NULL;
+    char buf[32];
+    size_t len = 0;
+    char* end = NULL;
+    unsigned long long val = 0;
+
+    if (!line)
+        return 0;
+
+    lt = strchr(line, '<');
+    if (!lt)
+        return 0;
+
+    gt = strchr(lt, '>');
+    if (!gt || gt <= lt + 1)
+        return 0;
+
+    len = (size_t)(gt - lt - 1);
+    if (len >= sizeof(buf))
+        len = sizeof(buf) - 1;
+
+    memcpy(buf, lt + 1, len);
+    buf[len] = '\0';
+
+    val = strtoull(buf, &end, 16);
+    if (end == buf)
+        return 0;
+
+    return (uint64_t)val;
+}
+
 static int gb_timer_list_find_gate(uint64_t expected_ns,
                                    uint64_t tolerance_ns,
+                                   uint64_t match_ptr,
+                                   uint64_t* found_ptr,
                                    uint64_t* found_soft_ns,
                                    uint64_t* found_hard_ns,
                                    unsigned int* found_state,
@@ -71,6 +107,7 @@ static int gb_timer_list_find_gate(uint64_t expected_ns,
     uint64_t best_soft = 0;
     unsigned int best_state = 0;
     bool best_soft_hard_mismatch = false;
+    uint64_t best_ptr = 0;
 
     fp = fopen(GB_TIMER_LIST_PATH, "r");
     if (!fp)
@@ -82,11 +119,14 @@ static int gb_timer_list_find_gate(uint64_t expected_ns,
         unsigned long long hard = 0;
         char* state_pos;
         uint64_t diff;
+        uint64_t timer_ptr = 0;
 
         if (!strstr(line, GB_TIMER_LIST_FUNC))
             continue;
 
         saw_gate = true;
+
+        timer_ptr = gb_parse_timer_ptr(line);
 
         state_pos = strstr(line, "S:");
         if (state_pos)
@@ -98,6 +138,9 @@ static int gb_timer_list_find_gate(uint64_t expected_ns,
         if (sscanf(line, " # expires at %llu-%llu nsecs", &soft, &hard) != 2)
             continue;
 
+        if (match_ptr != 0 && timer_ptr != match_ptr)
+            continue;
+
         diff = gb_abs_diff_u64((uint64_t)hard, expected_ns);
         if (diff < best_diff) {
             best_diff = diff;
@@ -105,6 +148,7 @@ static int gb_timer_list_find_gate(uint64_t expected_ns,
             best_soft = (uint64_t)soft;
             best_state = state;
             best_soft_hard_mismatch = (soft != hard);
+            best_ptr = timer_ptr;
         }
     }
 
@@ -113,10 +157,15 @@ static int gb_timer_list_find_gate(uint64_t expected_ns,
     if (!saw_gate)
         return -ENOENT;
 
+    if (match_ptr != 0 && best_ptr == 0)
+        return -ENOENT;
+
     if (found_soft_ns)
         *found_soft_ns = best_soft;
     if (found_hard_ns)
         *found_hard_ns = best_expiry;
+    if (found_ptr)
+        *found_ptr = best_ptr;
     if (found_state)
         *found_state = best_state;
     if (soft_hard_mismatch)
@@ -132,20 +181,26 @@ static int gb_timer_list_expect_found(const char* label,
                                       uint64_t expected_ns,
                                       uint64_t tolerance_ns,
                                       uint64_t max_allowed_ns,
-                                      uint64_t* found_hard_out) {
+                                      uint64_t* found_hard_out,
+                                      uint64_t* timer_ptr_io) {
     struct timespec req = {0};
     uint64_t found_expiry = 0;
     uint64_t found_soft = 0;
     unsigned int found_state = 0;
     bool soft_hard_mismatch = false;
+    uint64_t found_ptr = 0;
     int ret = -ERANGE;
     uint64_t diff;
+    uint64_t match_ptr = 0;
 
     req.tv_nsec = (long)GB_TIMER_LIST_RETRY_NS;
 
+    if (timer_ptr_io)
+        match_ptr = *timer_ptr_io;
+
     for (int i = 0; i < GB_TIMER_LIST_RETRIES; i++) {
-        ret = gb_timer_list_find_gate(expected_ns, tolerance_ns, &found_soft, &found_expiry, &found_state,
-                                      &soft_hard_mismatch);
+        ret = gb_timer_list_find_gate(expected_ns, tolerance_ns, match_ptr, &found_ptr, &found_soft, &found_expiry,
+                                      &found_state, &soft_hard_mismatch);
         if (ret == 0 || ret == -EACCES || ret == -EPERM)
             break;
         nanosleep(&req, NULL);
@@ -158,7 +213,11 @@ static int gb_timer_list_expect_found(const char* label,
             return -EINVAL;
         }
         if (ret == -ENOENT) {
-            gb_selftest_log("%s: missing gate_timer_func entry\n", label);
+            if (match_ptr != 0)
+                gb_selftest_log("%s: missing gate_timer_func entry (ptr=0x%llx)\n", label,
+                                (unsigned long long)match_ptr);
+            else
+                gb_selftest_log("%s: missing gate_timer_func entry\n", label);
             return -EINVAL;
         }
         if (ret == -EACCES || ret == -EPERM) {
@@ -170,9 +229,21 @@ static int gb_timer_list_expect_found(const char* label,
     }
 
     diff = gb_abs_diff_u64(found_expiry, expected_ns);
-    gb_selftest_log("%s: expected=%llu +/- %llu, found=%llu (soft=%llu) diff=%llu state=0x%x\n", label,
-                    (unsigned long long)expected_ns, (unsigned long long)tolerance_ns, (unsigned long long)found_expiry,
-                    (unsigned long long)found_soft, (unsigned long long)diff, found_state);
+    if (timer_ptr_io && found_ptr != 0)
+        *timer_ptr_io = found_ptr;
+
+    if (found_ptr != 0) {
+        gb_selftest_log("%s: expected=%llu +/- %llu, found=%llu (soft=%llu) diff=%llu state=0x%x ptr=0x%llx\n", label,
+                        (unsigned long long)expected_ns, (unsigned long long)tolerance_ns,
+                        (unsigned long long)found_expiry, (unsigned long long)found_soft, (unsigned long long)diff,
+                        found_state, (unsigned long long)found_ptr);
+    }
+    else {
+        gb_selftest_log("%s: expected=%llu +/- %llu, found=%llu (soft=%llu) diff=%llu state=0x%x\n", label,
+                        (unsigned long long)expected_ns, (unsigned long long)tolerance_ns,
+                        (unsigned long long)found_expiry, (unsigned long long)found_soft, (unsigned long long)diff,
+                        found_state);
+    }
 
     if (soft_hard_mismatch) {
         gb_selftest_log("%s: soft/hard expiry mismatch\n", label);
@@ -200,7 +271,7 @@ static int gb_timer_list_expect(const char* label,
                                 uint64_t expected_ns,
                                 uint64_t tolerance_ns,
                                 uint64_t max_allowed_ns) {
-    return gb_timer_list_expect_found(label, expected_ns, tolerance_ns, max_allowed_ns, NULL);
+    return gb_timer_list_expect_found(label, expected_ns, tolerance_ns, max_allowed_ns, NULL, NULL);
 }
 
 static int gb_calc_expected_start(uint64_t now_ns, uint64_t base_ns, uint64_t cycle_ns, uint64_t* out_ns) {
@@ -229,6 +300,223 @@ static int gb_calc_expected_start(uint64_t now_ns, uint64_t base_ns, uint64_t cy
     return 0;
 }
 
+int gb_selftest_timer_inactive_no_clamp(struct gb_nl_sock* sock, uint32_t base_index) {
+    struct gb_nl_msg* msg = NULL;
+    struct gb_nl_msg* resp = NULL;
+    struct gate_shape shape;
+    struct gate_entry entry;
+    struct gate_dump dump;
+    uint64_t now_ns = 0;
+    uint64_t base_future = 0;
+    uint64_t expected_ns = 0;
+    clockid_t clkid = CLOCK_TAI;
+    int ret;
+    int test_ret = 0;
+
+    if (!sock)
+        return -EINVAL;
+
+    gb_selftest_shape_default(&shape, 1);
+    gb_selftest_entry_default(&entry);
+
+    ret = gb_clock_gettime_ns(CLOCK_TAI, &now_ns);
+    if (ret < 0) {
+        ret = gb_clock_gettime_ns(CLOCK_MONOTONIC, &now_ns);
+        if (ret < 0)
+            return ret;
+        clkid = CLOCK_MONOTONIC;
+    }
+
+    shape.clockid = (uint32_t)clkid;
+    shape.interval_ns = GB_TIMER_LIST_INTERVAL_NS;
+    shape.cycle_time = GB_TIMER_LIST_INTERVAL_NS;
+    shape.cycle_time_ext = 0;
+    shape.entries = 1;
+    entry.interval = (uint32_t)GB_TIMER_LIST_INTERVAL_NS;
+
+    if (UINT64_MAX - now_ns < GB_TIMER_LIST_OLD_DELTA_NS) {
+        gb_selftest_log("inactive-first-start: base time overflow\n");
+        return -ERANGE;
+    }
+
+    base_future = now_ns + GB_TIMER_LIST_OLD_DELTA_NS;
+    shape.base_time = base_future;
+
+    ret = gb_selftest_alloc_msgs(&msg, &resp, gate_msg_capacity(1, 0));
+    if (ret < 0)
+        return ret;
+
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, NLM_F_CREATE | NLM_F_EXCL, 0, -1);
+    if (ret < 0) {
+        test_ret = ret;
+        goto out;
+    }
+
+    ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto out;
+    }
+
+    ret = gb_nl_get_action(sock, base_index, &dump, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+    gb_gate_dump_free(&dump);
+
+    ret = gb_calc_expected_start(now_ns, base_future, shape.cycle_time, &expected_ns);
+    if (ret < 0) {
+        gb_selftest_log("inactive-first-start: expected start overflow\n");
+        test_ret = -EINVAL;
+        goto cleanup;
+    }
+
+    gb_selftest_log("inactive-first-start: now=%llu base=%llu cycle=%llu interval=%u\n", (unsigned long long)now_ns,
+                    (unsigned long long)base_future, (unsigned long long)shape.cycle_time, entry.interval);
+    test_ret = gb_timer_list_expect("inactive-first-start", expected_ns, GB_TIMER_LIST_TOL_NS, 0);
+
+cleanup:
+    gb_selftest_cleanup_gate(sock, msg, resp, base_index);
+
+out:
+    gb_selftest_free_msgs(msg, resp);
+    return test_ret;
+}
+
+int gb_selftest_timer_active_clamp(struct gb_nl_sock* sock, uint32_t base_index) {
+    struct gb_nl_msg* msg = NULL;
+    struct gb_nl_msg* resp = NULL;
+    struct gate_shape shape;
+    struct gate_entry entry;
+    struct gate_dump dump;
+    uint64_t now_ns = 0;
+    uint64_t base_old = 0;
+    uint64_t base_new = 0;
+    uint64_t expected_old = 0;
+    uint64_t expected_new = 0;
+    uint64_t old_expiry = 0;
+    uint64_t timer_ptr = 0;
+    uint64_t cycle_ns = GB_TIMER_LIST_INTERVAL_NS * 4ull;
+    clockid_t clkid = CLOCK_TAI;
+    int ret;
+    int test_ret = 0;
+
+    if (!sock)
+        return -EINVAL;
+
+    gb_selftest_shape_default(&shape, 1);
+    gb_selftest_entry_default(&entry);
+
+    ret = gb_clock_gettime_ns(CLOCK_TAI, &now_ns);
+    if (ret < 0) {
+        ret = gb_clock_gettime_ns(CLOCK_MONOTONIC, &now_ns);
+        if (ret < 0)
+            return ret;
+        clkid = CLOCK_MONOTONIC;
+    }
+
+    shape.clockid = (uint32_t)clkid;
+    shape.interval_ns = cycle_ns;
+    shape.cycle_time = cycle_ns;
+    shape.cycle_time_ext = 0;
+    shape.entries = 1;
+    entry.interval = (uint32_t)cycle_ns;
+
+    if (now_ns > (cycle_ns * 2ull))
+        base_old = now_ns - (cycle_ns * 2ull);
+    else
+        base_old = 0;
+
+    shape.base_time = base_old;
+
+    ret = gb_selftest_alloc_msgs(&msg, &resp, gate_msg_capacity(1, 0));
+    if (ret < 0)
+        return ret;
+
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, NLM_F_CREATE | NLM_F_EXCL, 0, -1);
+    if (ret < 0) {
+        test_ret = ret;
+        goto out;
+    }
+
+    ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto out;
+    }
+
+    ret = gb_nl_get_action(sock, base_index, &dump, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+    gb_gate_dump_free(&dump);
+
+    ret = gb_calc_expected_start(now_ns, base_old, cycle_ns, &expected_old);
+    if (ret < 0) {
+        gb_selftest_log("active-clamp-old: expected start overflow\n");
+        test_ret = -EINVAL;
+        goto cleanup;
+    }
+
+    gb_selftest_log("active-clamp-old: now=%llu base=%llu cycle=%llu interval=%u\n", (unsigned long long)now_ns,
+                    (unsigned long long)base_old, (unsigned long long)cycle_ns, entry.interval);
+    test_ret = gb_timer_list_expect_found("active-clamp-old", expected_old, GB_TIMER_LIST_TOL_NS * 2, 0, &old_expiry,
+                                          &timer_ptr);
+    if (test_ret < 0)
+        goto cleanup;
+
+    ret = gb_clock_gettime_ns(clkid, &now_ns);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    if (UINT64_MAX - now_ns < GB_TIMER_LIST_NEW_DELTA_NS) {
+        gb_selftest_log("active-clamp-new: base time overflow\n");
+        test_ret = -ERANGE;
+        goto cleanup;
+    }
+
+    base_new = now_ns + GB_TIMER_LIST_NEW_DELTA_NS;
+    shape.base_time = base_new;
+
+    gb_nl_msg_reset(msg);
+    ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, NLM_F_REPLACE, 0, -1);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+    ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    ret = gb_calc_expected_start(now_ns, base_new, cycle_ns, &expected_new);
+    if (ret < 0) {
+        gb_selftest_log("active-clamp-new: expected start overflow\n");
+        test_ret = -EINVAL;
+        goto cleanup;
+    }
+
+    gb_selftest_log(
+        "active-clamp-new: now=%llu base_old=%llu base_new=%llu cycle=%llu interval=%u expected_new=%llu "
+        "old_expiry=%llu\n",
+        (unsigned long long)now_ns, (unsigned long long)base_old, (unsigned long long)base_new,
+        (unsigned long long)cycle_ns, entry.interval, (unsigned long long)expected_new, (unsigned long long)old_expiry);
+    test_ret =
+        gb_timer_list_expect_found("active-clamp-new", old_expiry, GB_TIMER_LIST_TOL_NS * 2, 0, NULL, &timer_ptr);
+
+cleanup:
+    gb_selftest_cleanup_gate(sock, msg, resp, base_index);
+
+out:
+    gb_selftest_free_msgs(msg, resp);
+    return test_ret;
+}
+
 int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) {
     struct gb_nl_msg* msg = NULL;
     struct gb_nl_msg* resp = NULL;
@@ -245,11 +533,12 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
     uint64_t large_cycle = 0;
     uint64_t baseline_cycle = 0;
     uint64_t clamp_base = 0;
-    uint64_t clamp_cycle_old = GB_TIMER_LIST_INTERVAL_NS;
+    uint64_t clamp_cycle_old = GB_TIMER_LIST_INTERVAL_NS * 2ull;
     uint64_t clamp_cycle_new = GB_TIMER_LIST_INTERVAL_NS * 4ull;
     uint64_t clamp_expected_old = 0;
     uint64_t clamp_expected_new = 0;
     uint64_t clamp_old_expiry = 0;
+    uint64_t clamp_timer_ptr = 0;
     clockid_t clkid = CLOCK_TAI;
     int ret;
     int test_ret = 0;
@@ -365,8 +654,8 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
         goto cleanup;
     }
 
-    if (now_ns > (GB_TIMER_LIST_INTERVAL_NS * 2ull))
-        clamp_base = now_ns - (GB_TIMER_LIST_INTERVAL_NS * 2ull);
+    if (now_ns > (clamp_cycle_old * 2ull))
+        clamp_base = now_ns - (clamp_cycle_old * 2ull);
     else
         clamp_base = 0;
 
@@ -398,7 +687,7 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
     gb_selftest_log("active-clamp-old: now=%llu base=%llu cycle=%llu interval=%u\n", (unsigned long long)now_ns,
                     (unsigned long long)clamp_base, (unsigned long long)clamp_cycle_old, entry.interval);
     test_ret = gb_timer_list_expect_found("active-clamp-old", clamp_expected_old, GB_TIMER_LIST_TOL_NS * 2, 0,
-                                          &clamp_old_expiry);
+                                          &clamp_old_expiry, &clamp_timer_ptr);
     if (test_ret < 0)
         goto cleanup;
 
@@ -436,7 +725,8 @@ int gb_selftest_timer_list_expiry(struct gb_nl_sock* sock, uint32_t base_index) 
     gb_selftest_log("active-clamp-new: now=%llu base=%llu cycle=%llu interval=%u expected_new=%llu old_expiry=%llu\n",
                     (unsigned long long)now_ns, (unsigned long long)clamp_base, (unsigned long long)clamp_cycle_new,
                     entry.interval, (unsigned long long)clamp_expected_new, (unsigned long long)clamp_old_expiry);
-    test_ret = gb_timer_list_expect("active-clamp-new", clamp_old_expiry, GB_TIMER_LIST_TOL_NS * 2, 0);
+    test_ret = gb_timer_list_expect_found("active-clamp-new", clamp_old_expiry, GB_TIMER_LIST_TOL_NS * 2, 0, NULL,
+                                          &clamp_timer_ptr);
     if (test_ret < 0)
         goto cleanup;
 

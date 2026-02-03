@@ -17,3 +17,9 @@ option('pcap',
   description: 'Enable libpcap capture support',
   value: 'auto'
 )
+
+option('deps_prefix',
+  type: 'string',
+  description: 'Prefix where local static deps were installed (empty to disable)',
+  value: 'deps/install'
+)

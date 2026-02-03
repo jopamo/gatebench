@@ -26,7 +26,6 @@ static const struct gb_selftest_case stable_tests[] = {
     {"duplicate create", gb_selftest_duplicate_create, -EEXIST},
     {"replace preserve schedule", gb_selftest_replace_preserve_schedule, 0},
     {"base time update", gb_selftest_base_time_update, 0},
-    {"timer list expiry", gb_selftest_timer_list_expiry, 0},
     {"replace persistence", gb_selftest_replace_persistence, 0},
     {"clockid variants", gb_selftest_clockid_variants, 0},
     {"cycle time derivation", gb_selftest_cycle_time_derivation, 0},
@@ -44,6 +43,9 @@ static const struct gb_selftest_case historical_tests[] = {
     {"create missing entry list", gb_selftest_create_missing_entries, 0},
     {"create empty entry list", gb_selftest_create_empty_entries, 0},
     {"replace append entries", gb_selftest_replace_append_entries, 0},
+    {"timer inactive no clamp", gb_selftest_timer_inactive_no_clamp, 0},
+    {"timer active clamp", gb_selftest_timer_active_clamp, 0},
+    {"timer list expiry", gb_selftest_timer_list_expiry, 0},
 };
 
 static const struct gb_selftest_case unpatched_tests[] = {
@@ -151,7 +153,11 @@ int gb_selftest_run(struct gb_config* cfg) {
     int ret_unpatched;
     int ret;
     static const char* const historical_fail_tests[] = {HISTORICAL_CREATE_MISSING_ENTRY_LIST,
-                                                        HISTORICAL_CREATE_EMPTY_ENTRY_LIST, HISTORICAL_REPLACE_APPEND};
+                                                        HISTORICAL_CREATE_EMPTY_ENTRY_LIST,
+                                                        HISTORICAL_REPLACE_APPEND,
+                                                        "timer inactive no clamp",
+                                                        "timer active clamp",
+                                                        "timer list expiry"};
     static const char* const unpatched_fail_tests[] = {UNPATCHED_LARGE_DUMP};
 
     base_index = cfg->index;

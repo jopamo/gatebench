@@ -1,0 +1,12 @@
+[submodule "libmnl"]
+	path = libmnl
+	url = https://github.com/1g4-mirror/libmnl
+[submodule "libpcap"]
+	path = libpcap
+	url = https://github.com/the-tcpdump-group/libpcap
+[submodule "iproute2"]
+	path = iproute2
+	url = https://github.com/iproute2/iproute2
+[submodule "linux"]
+	path = linux
+	url = https://github.com/torvalds/linux
