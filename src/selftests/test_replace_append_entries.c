@@ -1,6 +1,7 @@
 #include "selftest_tests.h"
 #include <errno.h>
 #include <stdio.h>
+#include <unistd.h>
 
 int gb_selftest_replace_append_entries(struct gb_nl_sock* sock, uint32_t base_index) {
     struct gb_nl_msg* msg = NULL;
@@ -51,6 +52,8 @@ int gb_selftest_replace_append_entries(struct gb_nl_sock* sock, uint32_t base_in
         test_ret = ret;
         goto cleanup;
     }
+
+    usleep(5 * 1000 * 1000);
 
     ret = gb_nl_get_action(sock, base_index, &dump, GB_SELFTEST_TIMEOUT_MS);
     if (ret < 0) {
