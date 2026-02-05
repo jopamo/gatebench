@@ -31,6 +31,8 @@ static const struct gb_selftest_case stable_tests[] = {
     {"attr presence matrix", gb_selftest_attr_matrix, 0},
     {"create attr matrix", gb_selftest_attr_matrix_create, 0},
     {"unknown attrs", gb_selftest_unknown_attrs, 0},
+    {"extreme time values", gb_selftest_extreme_time_values, 0},
+    {"cycle sum overflow", gb_selftest_cycle_sum_overflow, 0},
     {"clockid variants", gb_selftest_clockid_variants, 0},
     {"cycle time derivation", gb_selftest_cycle_time_derivation, 0},
     {"cycle time extension parsing", gb_selftest_cycle_time_ext_parsing, 0},
