@@ -21,6 +21,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
 #define RACE_SEED_BASE 0x5a17c3d1u
@@ -31,7 +32,8 @@
 #define RACE_EXTACK_MSG_MAX 128u
 #define RACE_EXTACK_SLOTS 6u
 #define RACE_INVALID_CASES 8u
-#define RACE_THREAD_COUNT 5u
+#define RACE_BASETIME_JITTER_NS 10000000u
+#define RACE_THREAD_COUNT 7u
 
 #ifndef NLM_F_ACK_TLVS
 #define NLM_F_ACK_TLVS 0x200
@@ -78,6 +80,17 @@ struct gb_race_dump_ctx {
     struct gb_race_extack_stats extack;
 };
 
+struct gb_race_get_ctx {
+    atomic_bool* stop;
+    uint32_t index;
+    int timeout_ms;
+    int cpu;
+    uint64_t ops;
+    uint64_t errors;
+    uint64_t err_counts[RACE_ERRNO_MAX];
+    struct gb_race_extack_stats extack;
+};
+
 struct gb_race_traffic_ctx {
     atomic_bool* stop;
     uint32_t seed;
@@ -88,6 +101,19 @@ struct gb_race_traffic_ctx {
 };
 
 struct gb_race_invalid_ctx {
+    const struct gb_config* cfg;
+    atomic_bool* stop;
+    uint32_t seed;
+    uint32_t index;
+    int timeout_ms;
+    int cpu;
+    uint64_t ops;
+    uint64_t errors;
+    uint64_t err_counts[RACE_ERRNO_MAX];
+    struct gb_race_extack_stats extack;
+};
+
+struct gb_race_update_ctx {
     const struct gb_config* cfg;
     atomic_bool* stop;
     uint32_t seed;
@@ -356,6 +382,17 @@ static int32_t race_random_maxoctets(uint32_t* seed) {
     return (int32_t)(RACE_MIN_PKT + rng_range(seed, 65535u - RACE_MIN_PKT));
 }
 
+static uint64_t race_clock_now_ns(clockid_t clockid) {
+    struct timespec ts;
+
+    if (clock_gettime(clockid, &ts) != 0) {
+        if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+            return 0;
+    }
+
+    return ((uint64_t)ts.tv_sec * 1000000000ull) + (uint64_t)ts.tv_nsec;
+}
+
 static void race_shape_init(struct gate_shape* shape, const struct gb_config* cfg) {
     memset(shape, 0, sizeof(*shape));
     shape->clockid = cfg->clockid;
@@ -606,6 +643,31 @@ static int race_send_bad_interval(struct gb_nl_sock* sock,
     return gb_nl_send_recv(sock, msg, resp, timeout_ms);
 }
 
+static int race_send_basetime_update(struct gb_nl_sock* sock,
+                                     struct gb_nl_msg* msg,
+                                     struct gb_nl_msg* resp,
+                                     uint32_t index,
+                                     uint64_t basetime,
+                                     int timeout_ms) {
+    struct nlmsghdr* nlh;
+    struct nlattr *nest_tab, *nest_prio, *nest_opts;
+    struct tc_gate gate_params;
+
+    gb_nl_msg_reset(msg);
+    nlh = race_gate_nlmsg_start(msg, NLM_F_REPLACE, index, &nest_tab, &nest_prio, &nest_opts);
+
+    memset(&gate_params, 0, sizeof(gate_params));
+    gate_params.index = index;
+    gate_params.action = TC_ACT_PIPE;
+    mnl_attr_put(nlh, TCA_GATE_PARMS, sizeof(gate_params), &gate_params);
+
+    mnl_attr_put_u64(nlh, TCA_GATE_BASE_TIME, basetime);
+
+    race_gate_nlmsg_end(msg, nlh, nest_tab, nest_prio, nest_opts);
+
+    return gb_nl_send_recv(sock, msg, resp, timeout_ms);
+}
+
 static uint32_t race_fill_entries(struct gate_entry* entries,
                                   uint32_t max_entries,
                                   uint32_t interval_max,
@@ -731,6 +793,66 @@ static void* race_dump_thread(void* arg) {
     }
 
     gb_nl_msg_free(req);
+    gb_nl_close(sock);
+    return NULL;
+}
+
+static void* race_get_thread(void* arg) {
+    struct gb_race_get_ctx* ctx = arg;
+    struct gb_nl_sock* sock = NULL;
+    struct gb_nl_msg* req = NULL;
+    struct gb_nl_msg* resp = NULL;
+    struct gate_dump dump;
+    int ret;
+
+    race_pin_thread("get", ctx->cpu);
+
+    ret = gb_nl_open(&sock);
+    if (ret < 0) {
+        race_record_err(&ctx->errors, ctx->err_counts, ret);
+        return NULL;
+    }
+
+    req = gb_nl_msg_alloc(1024u);
+    resp = gb_nl_msg_alloc((size_t)MNL_SOCKET_BUFFER_SIZE);
+    if (!req || !resp) {
+        race_record_err(&ctx->errors, ctx->err_counts, -ENOMEM);
+        goto out;
+    }
+
+    ret = build_gate_getaction(req, ctx->index);
+    if (ret < 0) {
+        race_record_err(&ctx->errors, ctx->err_counts, ret);
+        goto out;
+    }
+
+    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed)) {
+        ret = gb_nl_send_recv(sock, req, resp, ctx->timeout_ms);
+        if (ret < 0) {
+            if (ret != -ENOENT)
+                race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
+        }
+        else {
+            ret = gb_nl_gate_parse((struct nlmsghdr*)resp->buf, &dump);
+            if (ret < 0) {
+                race_record_err(&ctx->errors, ctx->err_counts, ret);
+                gb_gate_dump_free(&dump);
+            }
+            else {
+                gb_gate_dump_free(&dump);
+            }
+        }
+
+        ctx->ops++;
+        if ((ctx->ops & 0xffu) == 0u)
+            usleep(100);
+    }
+
+out:
+    if (req)
+        gb_nl_msg_free(req);
+    if (resp)
+        gb_nl_msg_free(resp);
     gb_nl_close(sock);
     return NULL;
 }
@@ -940,18 +1062,69 @@ out:
     return NULL;
 }
 
+static void* race_basetime_thread(void* arg) {
+    struct gb_race_update_ctx* ctx = arg;
+    struct gb_nl_sock* sock = NULL;
+    struct gb_nl_msg* msg = NULL;
+    struct gb_nl_msg* resp = NULL;
+    int ret;
+
+    race_pin_thread("basetime", ctx->cpu);
+
+    ret = gb_nl_open(&sock);
+    if (ret < 0) {
+        race_record_err(&ctx->errors, ctx->err_counts, ret);
+        return NULL;
+    }
+
+    msg = gb_nl_msg_alloc(1024u);
+    resp = gb_nl_msg_alloc((size_t)MNL_SOCKET_BUFFER_SIZE);
+    if (!msg || !resp) {
+        race_record_err(&ctx->errors, ctx->err_counts, -ENOMEM);
+        goto out;
+    }
+
+    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed)) {
+        uint64_t now = race_clock_now_ns((clockid_t)ctx->cfg->clockid);
+        uint64_t jitter = 1u + (uint64_t)rng_range(&ctx->seed, RACE_BASETIME_JITTER_NS);
+        uint64_t basetime = now + jitter;
+
+        ret = race_send_basetime_update(sock, msg, resp, ctx->index, basetime, ctx->timeout_ms);
+        if (ret < 0) {
+            if (ret != -ENOENT)
+                race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
+        }
+
+        ctx->ops++;
+        if ((ctx->ops & 0xffu) == 0u)
+            usleep(100);
+    }
+
+out:
+    if (msg)
+        gb_nl_msg_free(msg);
+    if (resp)
+        gb_nl_msg_free(resp);
+    gb_nl_close(sock);
+    return NULL;
+}
+
 int gb_race_run(const struct gb_config* cfg) {
     atomic_bool stop = ATOMIC_VAR_INIT(false);
     struct gb_race_nl_ctx replace_ctx;
     struct gb_race_dump_ctx dump_ctx;
+    struct gb_race_get_ctx get_ctx;
     struct gb_race_nl_ctx delete_ctx;
     struct gb_race_traffic_ctx traffic_ctx;
     struct gb_race_invalid_ctx invalid_ctx;
+    struct gb_race_update_ctx basetime_ctx;
     pthread_t replace_thread;
     pthread_t dump_thread;
+    pthread_t get_thread;
     pthread_t delete_thread;
     pthread_t traffic_thread;
     pthread_t invalid_thread;
+    pthread_t basetime_thread;
     int cpus[RACE_THREAD_COUNT];
     int cpu_count;
     uint32_t base_interval;
@@ -1015,6 +1188,15 @@ int gb_race_run(const struct gb_config* cfg) {
         .errors = 0,
     };
 
+    get_ctx = (struct gb_race_get_ctx){
+        .stop = &stop,
+        .index = cfg->index,
+        .timeout_ms = cfg->timeout_ms,
+        .cpu = cpu_count > 0 ? cpus[2 % cpu_count] : -1,
+        .ops = 0,
+        .errors = 0,
+    };
+
     delete_ctx = (struct gb_race_nl_ctx){
         .cfg = cfg,
         .stop = &stop,
@@ -1023,7 +1205,7 @@ int gb_race_run(const struct gb_config* cfg) {
         .max_entries = max_entries,
         .interval_max = interval_max,
         .timeout_ms = cfg->timeout_ms,
-        .cpu = cpu_count > 0 ? cpus[3 % cpu_count] : -1,
+        .cpu = cpu_count > 0 ? cpus[5 % cpu_count] : -1,
         .ops = 0,
         .errors = 0,
     };
@@ -1031,7 +1213,7 @@ int gb_race_run(const struct gb_config* cfg) {
     traffic_ctx = (struct gb_race_traffic_ctx){
         .stop = &stop,
         .seed = RACE_SEED_BASE ^ 0x77777777u,
-        .cpu = cpu_count > 0 ? cpus[2 % cpu_count] : -1,
+        .cpu = cpu_count > 0 ? cpus[3 % cpu_count] : -1,
         .ops = 0,
         .errors = 0,
     };
@@ -1041,6 +1223,17 @@ int gb_race_run(const struct gb_config* cfg) {
         .stop = &stop,
         .seed = RACE_SEED_BASE ^ 0x99999999u,
         .index = invalid_base,
+        .timeout_ms = cfg->timeout_ms,
+        .cpu = cpu_count > 0 ? cpus[6 % cpu_count] : -1,
+        .ops = 0,
+        .errors = 0,
+    };
+
+    basetime_ctx = (struct gb_race_update_ctx){
+        .cfg = cfg,
+        .stop = &stop,
+        .seed = RACE_SEED_BASE ^ 0x55555555u,
+        .index = cfg->index,
         .timeout_ms = cfg->timeout_ms,
         .cpu = cpu_count > 0 ? cpus[4 % cpu_count] : -1,
         .ops = 0,
@@ -1052,8 +1245,9 @@ int gb_race_run(const struct gb_config* cfg) {
             printf("Note: only %d CPU%s available; race threads will share CPUs\n", cpu_count,
                    cpu_count == 1 ? "" : "s");
         }
-        printf("Race thread CPUs: replace=%d dump=%d traffic=%d delete=%d invalid=%d\n", replace_ctx.cpu, dump_ctx.cpu,
-               traffic_ctx.cpu, delete_ctx.cpu, invalid_ctx.cpu);
+        printf("Race thread CPUs: replace=%d dump=%d get=%d traffic=%d basetime=%d delete=%d invalid=%d\n",
+               replace_ctx.cpu, dump_ctx.cpu, get_ctx.cpu, traffic_ctx.cpu, basetime_ctx.cpu, delete_ctx.cpu,
+               invalid_ctx.cpu);
     }
 
     ret = pthread_create(&replace_thread, NULL, race_replace_thread, &replace_ctx);
@@ -1066,7 +1260,17 @@ int gb_race_run(const struct gb_config* cfg) {
         goto out_stop;
     created++;
 
+    ret = pthread_create(&get_thread, NULL, race_get_thread, &get_ctx);
+    if (ret != 0)
+        goto out_stop;
+    created++;
+
     ret = pthread_create(&traffic_thread, NULL, race_traffic_thread, &traffic_ctx);
+    if (ret != 0)
+        goto out_stop;
+    created++;
+
+    ret = pthread_create(&basetime_thread, NULL, race_basetime_thread, &basetime_ctx);
     if (ret != 0)
         goto out_stop;
     created++;
@@ -1092,10 +1296,14 @@ out_stop:
     if (created > 1)
         pthread_join(dump_thread, NULL);
     if (created > 2)
-        pthread_join(traffic_thread, NULL);
+        pthread_join(get_thread, NULL);
     if (created > 3)
-        pthread_join(delete_thread, NULL);
+        pthread_join(traffic_thread, NULL);
     if (created > 4)
+        pthread_join(basetime_thread, NULL);
+    if (created > 5)
+        pthread_join(delete_thread, NULL);
+    if (created > 6)
         pthread_join(invalid_thread, NULL);
 
     if (!cfg->json) {
@@ -1109,19 +1317,27 @@ out_stop:
                (unsigned long long)replace_ctx.errors);
         printf("  Dump ops:    %llu, errors: %llu\n", (unsigned long long)dump_ctx.ops,
                (unsigned long long)dump_ctx.errors);
+        printf("  Get ops:     %llu, errors: %llu\n", (unsigned long long)get_ctx.ops,
+               (unsigned long long)get_ctx.errors);
         printf("  Traffic ops: %llu, errors: %llu\n", (unsigned long long)traffic_ctx.ops,
                (unsigned long long)traffic_ctx.errors);
+        printf("  Basetime ops:%llu, errors: %llu\n", (unsigned long long)basetime_ctx.ops,
+               (unsigned long long)basetime_ctx.errors);
         printf("  Delete ops:  %llu, errors: %llu\n", (unsigned long long)delete_ctx.ops,
                (unsigned long long)delete_ctx.errors);
         printf("  Invalid ops: %llu, errors: %llu\n", (unsigned long long)invalid_ctx.ops,
                (unsigned long long)invalid_ctx.errors);
         race_print_err_breakdown("Replace", replace_ctx.errors, replace_ctx.err_counts);
         race_print_err_breakdown("Dump", dump_ctx.errors, dump_ctx.err_counts);
+        race_print_err_breakdown("Get", get_ctx.errors, get_ctx.err_counts);
         race_print_err_breakdown("Traffic", traffic_ctx.errors, traffic_ctx.err_counts);
+        race_print_err_breakdown("Basetime", basetime_ctx.errors, basetime_ctx.err_counts);
         race_print_err_breakdown("Delete", delete_ctx.errors, delete_ctx.err_counts);
         race_print_err_breakdown("Invalid", invalid_ctx.errors, invalid_ctx.err_counts);
         race_print_extack("Replace", &replace_ctx.extack);
         race_print_extack("Dump", &dump_ctx.extack);
+        race_print_extack("Get", &get_ctx.extack);
+        race_print_extack("Basetime", &basetime_ctx.extack);
         race_print_extack("Delete", &delete_ctx.extack);
         race_print_extack("Invalid", &invalid_ctx.extack);
     }

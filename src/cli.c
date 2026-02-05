@@ -56,7 +56,7 @@ static const char* usage_str =
     "  --dump-proof            Run RTM_GETACTION dump proof harness (default: off)\n"
     "  --pcap=PATH             Write nlmon capture to PATH (default: off)\n"
     "  --nlmon-iface=NAME      nlmon interface for capture (default: nlmon0)\n"
-    "  --race                  Run race workload mode (default: off; includes invalid input thread)\n"
+    "  --race                  Run race workload mode (replace/dump/get/basetime/traffic/delete/invalid threads)\n"
     "  --seconds=NUM           Race mode duration in seconds (default: 60)\n"
     "  --verbose               Show configuration, environment, and selftest details\n"
     "\n"
