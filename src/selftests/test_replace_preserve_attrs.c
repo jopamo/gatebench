@@ -84,8 +84,8 @@ int gb_selftest_replace_preserve_attrs(struct gb_nl_sock* sock, uint32_t base_in
             if (entries[i].gate_state)
                 mnl_attr_put(nlh, TCA_GATE_ENTRY_GATE, 0, NULL);
             mnl_attr_put_u32(nlh, TCA_GATE_ENTRY_INTERVAL, entries[i].interval);
-            mnl_attr_put_s32(nlh, TCA_GATE_ENTRY_IPV, entries[i].ipv);
-            mnl_attr_put_s32(nlh, TCA_GATE_ENTRY_MAX_OCTETS, entries[i].maxoctets);
+            mnl_attr_put(nlh, TCA_GATE_ENTRY_IPV, sizeof(entries[i].ipv), &entries[i].ipv);
+            mnl_attr_put(nlh, TCA_GATE_ENTRY_MAX_OCTETS, sizeof(entries[i].maxoctets), &entries[i].maxoctets);
             mnl_attr_nest_end(nlh, entry_nest);
         }
         mnl_attr_nest_end(nlh, entry_list);
