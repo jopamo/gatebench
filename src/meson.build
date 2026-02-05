@@ -21,6 +21,7 @@ gatebench_sources = files(
   'selftests/test_duplicate_create.c',
   'selftests/test_dump_correctness.c',
   'selftests/test_replace_persistence.c',
+  'selftests/test_replace_preserve_attrs.c',
   'selftests/test_clockid_variants.c',
   'selftests/test_cycle_time_derivation.c',
   'selftests/test_cycle_time_ext_parsing.c',

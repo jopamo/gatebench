@@ -13,6 +13,7 @@ int gb_selftest_replace_without_existing(struct gb_nl_sock* sock, uint32_t base_
 int gb_selftest_duplicate_create(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_dump_correctness(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_replace_persistence(struct gb_nl_sock* sock, uint32_t base_index);
+int gb_selftest_replace_preserve_attrs(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_clockid_variants(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_cycle_time_derivation(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_cycle_time_ext_parsing(struct gb_nl_sock* sock, uint32_t base_index);
