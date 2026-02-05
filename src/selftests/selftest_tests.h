@@ -34,5 +34,6 @@ int gb_selftest_entry_defaults(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_priority_flags(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_attr_matrix(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_unknown_attrs(struct gb_nl_sock* sock, uint32_t base_index);
+int gb_selftest_attr_matrix_create(struct gb_nl_sock* sock, uint32_t base_index);
 
 #endif /* GATEBENCH_SELFTEST_TESTS_H */
