@@ -33,6 +33,8 @@ static const struct gb_selftest_case stable_tests[] = {
     {"unknown attrs", gb_selftest_unknown_attrs, 0},
     {"extreme time values", gb_selftest_extreme_time_values, 0},
     {"cycle sum overflow", gb_selftest_cycle_sum_overflow, 0},
+    {"entry index attrs", gb_selftest_entry_index_attrs, 0},
+    {"mixed invalid entries", gb_selftest_mixed_invalid_entries, 0},
     {"clockid variants", gb_selftest_clockid_variants, 0},
     {"cycle time derivation", gb_selftest_cycle_time_derivation, 0},
     {"cycle time extension parsing", gb_selftest_cycle_time_ext_parsing, 0},

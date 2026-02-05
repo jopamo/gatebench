@@ -37,5 +37,7 @@ int gb_selftest_unknown_attrs(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_attr_matrix_create(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_extreme_time_values(struct gb_nl_sock* sock, uint32_t base_index);
 int gb_selftest_cycle_sum_overflow(struct gb_nl_sock* sock, uint32_t base_index);
+int gb_selftest_entry_index_attrs(struct gb_nl_sock* sock, uint32_t base_index);
+int gb_selftest_mixed_invalid_entries(struct gb_nl_sock* sock, uint32_t base_index);
 
 #endif /* GATEBENCH_SELFTEST_TESTS_H */
