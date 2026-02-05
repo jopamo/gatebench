@@ -473,3 +473,128 @@ int gb_selftest_attr_matrix_create(struct gb_nl_sock* sock, uint32_t base_index)
     gb_selftest_free_msgs(msg, resp);
     return test_ret;
 }
+
+int gb_selftest_extreme_time_values(struct gb_nl_sock* sock, uint32_t base_index) {
+    struct gb_nl_msg* msg = NULL;
+    struct gb_nl_msg* resp = NULL;
+    struct gate_shape shape;
+    struct gate_entry entries[2];
+    struct gate_dump dump;
+    int ret;
+    int test_ret = 0;
+    const uint64_t large_time = UINT64_C(0x7ffffffffffff000);
+    const uint64_t large_ext = UINT64_C(0x7ffffffffffff123);
+    const uint32_t gate_flags = 0x44U;
+    const int32_t priority = 4;
+    const uint32_t mask = ATTR_CLOCKID | ATTR_BASE_TIME | ATTR_CYCLE_TIME | ATTR_CYCLE_TIME_EXT | ATTR_FLAGS |
+                          ATTR_PRIORITY | ATTR_ENTRIES;
+
+    gb_selftest_shape_default(&shape, 2);
+    shape.clockid = CLOCK_MONOTONIC;
+    shape.base_time = large_time;
+    shape.cycle_time = large_time;
+    shape.cycle_time_ext = large_ext;
+
+    gb_selftest_entry_default(&entries[0]);
+    entries[0].interval = 1000000;
+    entries[0].gate_state = true;
+    gb_selftest_entry_default(&entries[1]);
+    entries[1].interval = 2000000;
+    entries[1].gate_state = false;
+
+    ret = gb_selftest_alloc_msgs(&msg, &resp, gate_msg_capacity(2, gate_flags));
+    if (ret < 0)
+        return ret;
+
+    gb_nl_msg_reset(msg);
+    ret = build_gate_create_mask(msg, base_index, &shape, entries, 2, gate_flags, priority, mask, false, false);
+    if (ret < 0) {
+        test_ret = ret;
+        goto out;
+    }
+
+    ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    ret = gb_nl_get_action(sock, base_index, &dump, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    ret = verify_dump(mask, &dump, shape.clockid, shape.base_time, shape.cycle_time, shape.cycle_time_ext, gate_flags,
+                      priority, entries, 2);
+    gb_gate_dump_free(&dump);
+    if (ret < 0)
+        test_ret = ret;
+
+cleanup:
+    gb_selftest_cleanup_gate(sock, msg, resp, base_index);
+out:
+    gb_selftest_free_msgs(msg, resp);
+    return test_ret;
+}
+
+int gb_selftest_cycle_sum_overflow(struct gb_nl_sock* sock, uint32_t base_index) {
+    struct gb_nl_msg* msg = NULL;
+    struct gb_nl_msg* resp = NULL;
+    struct gate_shape shape;
+    struct gate_entry entries[2];
+    struct gate_dump dump;
+    int ret;
+    int test_ret = 0;
+    const uint32_t mask = ATTR_CLOCKID | ATTR_ENTRIES;
+    uint64_t expected_cycle;
+
+    gb_selftest_shape_default(&shape, 2);
+    shape.clockid = CLOCK_TAI;
+    shape.base_time = 0;
+    shape.cycle_time = 0;
+    shape.cycle_time_ext = 0;
+
+    gb_selftest_entry_default(&entries[0]);
+    entries[0].interval = UINT32_MAX;
+    entries[0].gate_state = true;
+    gb_selftest_entry_default(&entries[1]);
+    entries[1].interval = 1;
+    entries[1].gate_state = false;
+
+    expected_cycle = sum_intervals(entries, 2);
+
+    ret = gb_selftest_alloc_msgs(&msg, &resp, gate_msg_capacity(2, 0));
+    if (ret < 0)
+        return ret;
+
+    gb_nl_msg_reset(msg);
+    ret = build_gate_create_mask(msg, base_index, &shape, entries, 2, 0, -1, mask, false, false);
+    if (ret < 0) {
+        test_ret = ret;
+        goto out;
+    }
+
+    ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    ret = gb_nl_get_action(sock, base_index, &dump, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    ret = verify_dump(mask, &dump, shape.clockid, 0, expected_cycle, 0, 0, -1, entries, 2);
+    gb_gate_dump_free(&dump);
+    if (ret < 0)
+        test_ret = ret;
+
+cleanup:
+    gb_selftest_cleanup_gate(sock, msg, resp, base_index);
+out:
+    gb_selftest_free_msgs(msg, resp);
+    return test_ret;
+}
