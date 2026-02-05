@@ -354,8 +354,9 @@ int gb_selftest_unknown_attrs(struct gb_nl_sock* sock, uint32_t base_index) {
         goto cleanup;
     }
     ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
-    if (ret < 0) {
-        test_ret = ret;
+    if (ret == 0) {
+        gb_selftest_log("Unknown attrs unexpectedly accepted\n");
+        test_ret = -EINVAL;
         goto cleanup;
     }
 
@@ -365,8 +366,8 @@ int gb_selftest_unknown_attrs(struct gb_nl_sock* sock, uint32_t base_index) {
         goto cleanup;
     }
 
-    ret = verify_dump(full_mask, &dump, new_shape.clockid, new_shape.base_time, new_shape.cycle_time,
-                      new_shape.cycle_time_ext, new_flags, new_priority, new_entries, 2);
+    ret = verify_dump(0, &dump, old_shape.clockid, old_shape.base_time, old_shape.cycle_time, old_shape.cycle_time_ext,
+                      old_flags, old_priority, &old_entry, 1);
     gb_gate_dump_free(&dump);
     if (ret < 0)
         test_ret = ret;
