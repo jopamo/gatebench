@@ -26,16 +26,17 @@ static void add_attr_s32(struct nlmsghdr* nlh, uint16_t type, int32_t value) {
     mnl_attr_put(nlh, type, sizeof(value), &value);
 }
 
-static int build_gate_replace_mask(struct gb_nl_msg* msg,
-                                   uint32_t index,
-                                   const struct gate_shape* shape,
-                                   const struct gate_entry* entries,
-                                   uint32_t num_entries,
-                                   uint32_t gate_flags,
-                                   int32_t priority,
-                                   uint32_t attr_mask,
-                                   bool add_unknown,
-                                   bool add_unknown_entry) {
+static int build_gate_action_mask(struct gb_nl_msg* msg,
+                                  uint32_t index,
+                                  const struct gate_shape* shape,
+                                  const struct gate_entry* entries,
+                                  uint32_t num_entries,
+                                  uint32_t gate_flags,
+                                  int32_t priority,
+                                  uint32_t attr_mask,
+                                  uint16_t nlmsg_flags,
+                                  bool add_unknown,
+                                  bool add_unknown_entry) {
     struct nlmsghdr* nlh;
     struct tcamsg* tca;
     struct nlattr *nest_tab, *nest_prio, *nest_opts;
@@ -49,7 +50,7 @@ static int build_gate_replace_mask(struct gb_nl_msg* msg,
 
     nlh = mnl_nlmsg_put_header(msg->buf);
     nlh->nlmsg_type = RTM_NEWACTION;
-    nlh->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | NLM_F_REPLACE;
+    nlh->nlmsg_flags = (uint16_t)(NLM_F_REQUEST | NLM_F_ACK | nlmsg_flags);
     nlh->nlmsg_seq = 0;
 
     tca = mnl_nlmsg_put_extra_header(nlh, sizeof(*tca));
@@ -90,14 +91,14 @@ static int build_gate_replace_mask(struct gb_nl_msg* msg,
             add_attr_s32(nlh, TCA_GATE_ENTRY_IPV, entries[i].ipv);
             add_attr_s32(nlh, TCA_GATE_ENTRY_MAX_OCTETS, entries[i].maxoctets);
             if (add_unknown_entry)
-                mnl_attr_put_u32(nlh, TCA_GATE_ENTRY_MAX + 1, 0xdeadbeefU);
+                mnl_attr_put_u32(nlh, TCA_GATE_ENTRY_UNSPEC, 0xdeadbeefU);
             mnl_attr_nest_end(nlh, entry_nest);
         }
         mnl_attr_nest_end(nlh, entry_list);
     }
 
     if (add_unknown)
-        mnl_attr_put_u32(nlh, TCA_GATE_MAX + 1, 0xcafebabeU);
+        mnl_attr_put_u32(nlh, TCA_GATE_TM, 0xcafebabeU);
 
     mnl_attr_nest_end(nlh, nest_opts);
     mnl_attr_nest_end(nlh, nest_prio);
@@ -105,6 +106,34 @@ static int build_gate_replace_mask(struct gb_nl_msg* msg,
 
     msg->len = nlh->nlmsg_len;
     return 0;
+}
+
+static int build_gate_replace_mask(struct gb_nl_msg* msg,
+                                   uint32_t index,
+                                   const struct gate_shape* shape,
+                                   const struct gate_entry* entries,
+                                   uint32_t num_entries,
+                                   uint32_t gate_flags,
+                                   int32_t priority,
+                                   uint32_t attr_mask,
+                                   bool add_unknown,
+                                   bool add_unknown_entry) {
+    return build_gate_action_mask(msg, index, shape, entries, num_entries, gate_flags, priority, attr_mask,
+                                  NLM_F_REPLACE, add_unknown, add_unknown_entry);
+}
+
+static int build_gate_create_mask(struct gb_nl_msg* msg,
+                                  uint32_t index,
+                                  const struct gate_shape* shape,
+                                  const struct gate_entry* entries,
+                                  uint32_t num_entries,
+                                  uint32_t gate_flags,
+                                  int32_t priority,
+                                  uint32_t attr_mask,
+                                  bool add_unknown,
+                                  bool add_unknown_entry) {
+    return build_gate_action_mask(msg, index, shape, entries, num_entries, gate_flags, priority, attr_mask,
+                                  (uint16_t)(NLM_F_CREATE | NLM_F_EXCL), add_unknown, add_unknown_entry);
 }
 
 static int verify_dump(uint32_t mask,
@@ -345,6 +374,102 @@ int gb_selftest_unknown_attrs(struct gb_nl_sock* sock, uint32_t base_index) {
 cleanup:
     gb_selftest_cleanup_gate(sock, msg, resp, base_index);
 out:
+    gb_selftest_free_msgs(msg, resp);
+    return test_ret;
+}
+
+int gb_selftest_attr_matrix_create(struct gb_nl_sock* sock, uint32_t base_index) {
+    struct gb_nl_msg* msg = NULL;
+    struct gb_nl_msg* resp = NULL;
+    struct gate_shape shape;
+    struct gate_entry entries[2];
+    struct gate_dump dump;
+    int ret;
+    int test_ret = 0;
+    const uint32_t gate_flags = 0x33U;
+    const int32_t priority = 12;
+    const uint32_t mask_max = (1u << 7);
+
+    gb_selftest_shape_default(&shape, 2);
+    shape.clockid = CLOCK_BOOTTIME;
+    shape.base_time = 7777;
+    shape.cycle_time = 9000000;
+    shape.cycle_time_ext = 8888;
+
+    gb_selftest_entry_default(&entries[0]);
+    entries[0].gate_state = true;
+    entries[0].interval = 4000000;
+    gb_selftest_entry_default(&entries[1]);
+    entries[1].gate_state = false;
+    entries[1].interval = 6000000;
+
+    ret = gb_selftest_alloc_msgs(&msg, &resp, gate_msg_capacity(2, gate_flags));
+    if (ret < 0)
+        return ret;
+
+    for (uint32_t mask = 0; mask < mask_max; mask++) {
+        uint32_t exp_clockid = CLOCK_TAI;
+        uint64_t exp_base_time = 0;
+        uint64_t exp_cycle_time = sum_intervals(entries, 2);
+        uint64_t exp_cycle_time_ext = 0;
+        uint32_t exp_flags = 0;
+        int32_t exp_priority = -1;
+
+        gb_nl_msg_reset(msg);
+        ret = build_gate_create_mask(msg, base_index, &shape, entries, 2, gate_flags, priority, mask, false, false);
+        if (ret < 0) {
+            test_ret = ret;
+            break;
+        }
+
+        ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
+        if (!(mask & ATTR_ENTRIES)) {
+            if (ret == 0) {
+                gb_selftest_log("mask 0x%02x unexpectedly created without entries\n", mask);
+                test_ret = -EINVAL;
+                gb_selftest_cleanup_gate(sock, msg, resp, base_index);
+                break;
+            }
+            gb_selftest_cleanup_gate(sock, msg, resp, base_index);
+            continue;
+        }
+
+        if (ret < 0) {
+            test_ret = ret;
+            gb_selftest_cleanup_gate(sock, msg, resp, base_index);
+            break;
+        }
+
+        ret = gb_nl_get_action(sock, base_index, &dump, GB_SELFTEST_TIMEOUT_MS);
+        if (ret < 0) {
+            test_ret = ret;
+            gb_selftest_cleanup_gate(sock, msg, resp, base_index);
+            break;
+        }
+
+        if (mask & ATTR_CLOCKID)
+            exp_clockid = shape.clockid;
+        if (mask & ATTR_BASE_TIME)
+            exp_base_time = shape.base_time;
+        if (mask & ATTR_CYCLE_TIME)
+            exp_cycle_time = shape.cycle_time;
+        if (mask & ATTR_CYCLE_TIME_EXT)
+            exp_cycle_time_ext = shape.cycle_time_ext;
+        if (mask & ATTR_FLAGS)
+            exp_flags = gate_flags;
+        if (mask & ATTR_PRIORITY)
+            exp_priority = priority;
+
+        ret = verify_dump(mask, &dump, exp_clockid, exp_base_time, exp_cycle_time, exp_cycle_time_ext, exp_flags,
+                          exp_priority, entries, 2);
+        gb_gate_dump_free(&dump);
+        gb_selftest_cleanup_gate(sock, msg, resp, base_index);
+        if (ret < 0) {
+            test_ret = ret;
+            break;
+        }
+    }
+
     gb_selftest_free_msgs(msg, resp);
     return test_ret;
 }
