@@ -28,6 +28,8 @@ static const struct gb_selftest_case stable_tests[] = {
     {"base time update", gb_selftest_base_time_update, 0},
     {"replace persistence", gb_selftest_replace_persistence, 0},
     {"replace preserve attrs", gb_selftest_replace_preserve_attrs, 0},
+    {"attr presence matrix", gb_selftest_attr_matrix, 0},
+    {"unknown attrs", gb_selftest_unknown_attrs, 0},
     {"clockid variants", gb_selftest_clockid_variants, 0},
     {"cycle time derivation", gb_selftest_cycle_time_derivation, 0},
     {"cycle time extension parsing", gb_selftest_cycle_time_ext_parsing, 0},

@@ -40,6 +40,7 @@ gatebench_sources = files(
   'selftests/test_large_dump.c',
   'selftests/test_entry_defaults.c',
   'selftests/test_priority_flags.c',
+  'selftests/test_attr_matrix.c',
 )
 
 # Headers (for dependency tracking)
