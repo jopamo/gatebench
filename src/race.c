@@ -646,24 +646,39 @@ static int race_send_bad_interval(struct gb_nl_sock* sock,
 static int race_send_basetime_update(struct gb_nl_sock* sock,
                                      struct gb_nl_msg* msg,
                                      struct gb_nl_msg* resp,
+                                     const struct gb_config* cfg,
                                      uint32_t index,
                                      uint64_t basetime,
+                                     const struct gate_entry* entries,
+                                     uint32_t num_entries,
                                      int timeout_ms) {
-    struct nlmsghdr* nlh;
-    struct nlattr *nest_tab, *nest_prio, *nest_opts;
-    struct tc_gate gate_params;
+    struct gate_shape shape;
+    int ret;
+
+    memset(&shape, 0, sizeof(shape));
+    shape.clockid = cfg ? cfg->clockid : CLOCK_TAI;
+    shape.base_time = basetime;
+
+    /* Prefer configured cycle_time; otherwise derive from current entry list. */
+    shape.cycle_time = cfg ? cfg->cycle_time : 0;
+    if (shape.cycle_time == 0 && entries && num_entries > 0) {
+        uint64_t sum = 0;
+        for (uint32_t i = 0; i < num_entries; i++)
+            sum += (uint64_t)entries[i].interval;
+        shape.cycle_time = sum;
+    }
+    if (shape.cycle_time == 0) {
+        uint64_t interval_ns = cfg ? cfg->interval_ns : 0;
+        shape.cycle_time = interval_ns ? interval_ns : 1000000ull;
+    }
+    shape.cycle_time_ext = cfg ? cfg->cycle_time_ext : 0;
+    if (timeout_ms < 0)
+        timeout_ms = 0;
 
     gb_nl_msg_reset(msg);
-    nlh = race_gate_nlmsg_start(msg, NLM_F_REPLACE, index, &nest_tab, &nest_prio, &nest_opts);
-
-    memset(&gate_params, 0, sizeof(gate_params));
-    gate_params.index = index;
-    gate_params.action = TC_ACT_PIPE;
-    mnl_attr_put(nlh, TCA_GATE_PARMS, sizeof(gate_params), &gate_params);
-
-    mnl_attr_put_u64(nlh, TCA_GATE_BASE_TIME, basetime);
-
-    race_gate_nlmsg_end(msg, nlh, nest_tab, nest_prio, nest_opts);
+    ret = build_gate_newaction(msg, index, &shape, entries, num_entries, NLM_F_REPLACE, 0, -1);
+    if (ret < 0)
+        return ret;
 
     return gb_nl_send_recv(sock, msg, resp, timeout_ms);
 }
@@ -1067,6 +1082,8 @@ static void* race_basetime_thread(void* arg) {
     struct gb_nl_sock* sock = NULL;
     struct gb_nl_msg* msg = NULL;
     struct gb_nl_msg* resp = NULL;
+    struct gate_dump dump;
+    size_t cap;
     int ret;
 
     race_pin_thread("basetime", ctx->cpu);
@@ -1077,7 +1094,8 @@ static void* race_basetime_thread(void* arg) {
         return NULL;
     }
 
-    msg = gb_nl_msg_alloc(1024u);
+    cap = gate_msg_capacity(GB_MAX_ENTRIES, 0);
+    msg = gb_nl_msg_alloc(cap);
     resp = gb_nl_msg_alloc((size_t)MNL_SOCKET_BUFFER_SIZE);
     if (!msg || !resp) {
         race_record_err(&ctx->errors, ctx->err_counts, -ENOMEM);
@@ -1089,10 +1107,27 @@ static void* race_basetime_thread(void* arg) {
         uint64_t jitter = 1u + (uint64_t)rng_range(&ctx->seed, RACE_BASETIME_JITTER_NS);
         uint64_t basetime = now + jitter;
 
-        ret = race_send_basetime_update(sock, msg, resp, ctx->index, basetime, ctx->timeout_ms);
+        /*
+         * On some kernels, REPLACE without an entry list is treated as "set an
+         * empty list", yielding -EINVAL with extack "The entry list is empty".
+         * Avoid that by fetching the current schedule and sending it back with
+         * the updated base_time.
+         */
+        memset(&dump, 0, sizeof(dump));
+        ret = gb_nl_get_action(sock, ctx->index, &dump, ctx->timeout_ms);
         if (ret < 0) {
             if (ret != -ENOENT)
-                race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
+                race_record_err(&ctx->errors, ctx->err_counts, ret);
+        }
+        else {
+            ret = race_send_basetime_update(sock, msg, resp, ctx->cfg, ctx->index, basetime, dump.entries,
+                                            dump.num_entries, ctx->timeout_ms);
+            gb_gate_dump_free(&dump);
+
+            if (ret < 0) {
+                if (ret != -ENOENT)
+                    race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
+            }
         }
 
         ctx->ops++;
