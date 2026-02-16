@@ -37,6 +37,7 @@
 #include <sched.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -65,6 +66,10 @@
 #define NLMSGERR_ATTR_MSG 1
 #endif
 
+static void race_set_attr_len_unaligned(struct nlmsghdr* nlh, size_t attr_offset, uint16_t attr_len) {
+    memcpy((char*)nlh + attr_offset + offsetof(struct nlattr, nla_len), &attr_len, sizeof(attr_len));
+}
+
 struct gb_race_extack_entry {
     char msg[RACE_EXTACK_MSG_MAX];
     uint64_t count;
@@ -73,6 +78,12 @@ struct gb_race_extack_entry {
 struct gb_race_extack_stats {
     struct gb_race_extack_entry entries[RACE_EXTACK_SLOTS];
     uint64_t other;
+};
+
+struct race_extack_parse_ctx {
+    char* out;
+    size_t out_len;
+    bool found;
 };
 
 struct gb_race_nl_ctx {
@@ -195,13 +206,35 @@ static void race_record_err(uint64_t* errors, uint64_t* err_counts, int ret) {
     (*errors)++;
 }
 
+static int race_extack_attr_cb(const struct nlattr* attr, void* data) {
+    struct race_extack_parse_ctx* ctx = data;
+    const char* msg;
+
+    if (!ctx || ctx->found)
+        return MNL_CB_OK;
+
+    if (mnl_attr_get_type(attr) != NLMSGERR_ATTR_MSG)
+        return MNL_CB_OK;
+
+    if (mnl_attr_get_payload_len(attr) == 0)
+        return MNL_CB_OK;
+
+    msg = mnl_attr_get_str(attr);
+    if (!msg || msg[0] == '\0')
+        return MNL_CB_OK;
+
+    (void)snprintf(ctx->out, ctx->out_len, "%s", msg);
+    ctx->found = true;
+    return MNL_CB_STOP;
+}
+
 static bool race_parse_extack_msg(const struct gb_nl_msg* resp, char* out, size_t out_len) {
     const struct nlmsghdr* nlh;
-    const struct nlmsgerr* err;
-    const struct nlattr* attr;
+    struct race_extack_parse_ctx ctx;
     size_t payload_len;
     size_t err_len;
-    int attr_len;
+    size_t attr_offset_sz;
+    unsigned int attr_offset;
 
     if (!resp || !resp->buf || !out || out_len == 0)
         return false;
@@ -218,26 +251,20 @@ static bool race_parse_extack_msg(const struct gb_nl_msg* resp, char* out, size_
     if (payload_len <= err_len)
         return false;
 
-    err = (const struct nlmsgerr*)((const char*)nlh + NLMSG_HDRLEN);
-    if (payload_len - err_len > INT_MAX)
+    attr_offset_sz = (size_t)NLMSG_HDRLEN + err_len;
+    if (attr_offset_sz > (size_t)UINT_MAX)
         return false;
-    attr_len = (int)(payload_len - err_len);
-    attr = (const struct nlattr*)((const char*)err + err_len);
 
-    while (mnl_attr_ok(attr, attr_len)) {
-        if (mnl_attr_get_type(attr) == NLMSGERR_ATTR_MSG) {
-            const char* msg = mnl_attr_get_str(attr);
-            if (msg && msg[0] != '\0') {
-                strncpy(out, msg, out_len - 1);
-                out[out_len - 1] = '\0';
-                return true;
-            }
-        }
-        attr_len -= MNL_ALIGN(attr->nla_len);
-        attr = mnl_attr_next(attr);
-    }
+    attr_offset = (unsigned int)attr_offset_sz;
+    out[0] = '\0';
+    ctx.out = out;
+    ctx.out_len = out_len;
+    ctx.found = false;
 
-    return false;
+    if (mnl_attr_parse(nlh, attr_offset, race_extack_attr_cb, &ctx) < 0)
+        return false;
+
+    return ctx.found;
 }
 
 static void race_record_extack(struct gb_race_extack_stats* stats, const char* msg) {
@@ -256,8 +283,9 @@ static void race_record_extack(struct gb_race_extack_stats* stats, const char* m
     }
 
     if (empty < RACE_EXTACK_SLOTS) {
-        strncpy(stats->entries[empty].msg, msg, sizeof(stats->entries[empty].msg) - 1);
-        stats->entries[empty].msg[sizeof(stats->entries[empty].msg) - 1] = '\0';
+        size_t copy_len = strnlen(msg, sizeof(stats->entries[empty].msg) - 1u);
+        memcpy(stats->entries[empty].msg, msg, copy_len);
+        stats->entries[empty].msg[copy_len] = '\0';
         stats->entries[empty].count = 1;
         return;
     }
@@ -377,14 +405,15 @@ static int race_collect_cpus(int* cpus, int max) {
     cpu_set_t set;
     long nproc;
     int count = 0;
+    int nproc_i;
 
     if (!cpus || max <= 0)
         return 0;
 
     if (sched_getaffinity(0, sizeof(set), &set) == 0) {
-        for (int cpu = 0; cpu < CPU_SETSIZE && count < max; cpu++) {
+        for (size_t cpu = 0; cpu < (size_t)CPU_SETSIZE && count < max; cpu++) {
             if (CPU_ISSET(cpu, &set))
-                cpus[count++] = cpu;
+                cpus[count++] = (int)cpu;
         }
         if (count > 0)
             return count;
@@ -397,10 +426,11 @@ static int race_collect_cpus(int* cpus, int max) {
     if (nproc > max)
         nproc = max;
 
-    for (int i = 0; i < nproc; i++)
+    nproc_i = (int)nproc;
+    for (int i = 0; i < nproc_i; i++)
         cpus[i] = i;
 
-    return (int)nproc;
+    return nproc_i;
 }
 
 static void race_pin_thread(const char* label, int cpu) {
@@ -595,6 +625,7 @@ static int race_send_invalid_entry_attr(struct gb_nl_sock* sock,
     struct nlattr *nest_tab, *nest_prio, *nest_opts, *entry_list, *entry_nest;
     struct tc_gate gate_params;
     uint32_t interval = RACE_INVALID_INTERVAL_NS;
+    const uint16_t bad_attr_len = (uint16_t)(sizeof(struct nlattr) + 1u);
 
     gb_nl_msg_reset(msg);
     nlh = race_gate_nlmsg_start(msg, NLM_F_CREATE | NLM_F_EXCL, index, &nest_tab, &nest_prio, &nest_opts);
@@ -615,24 +646,21 @@ static int race_send_invalid_entry_attr(struct gb_nl_sock* sock,
         case 0: {
             size_t before = nlh->nlmsg_len;
             mnl_attr_put_u32(nlh, TCA_GATE_ENTRY_INTERVAL, interval);
-            struct nlattr* attr = (struct nlattr*)((char*)nlh + before);
-            attr->nla_len = NLA_HDRLEN + 1;
+            race_set_attr_len_unaligned(nlh, before, bad_attr_len);
             break;
         }
         case 1: {
             mnl_attr_put_u32(nlh, TCA_GATE_ENTRY_INTERVAL, interval);
             size_t before = nlh->nlmsg_len;
             mnl_attr_put_u32(nlh, TCA_GATE_ENTRY_IPV, 0);
-            struct nlattr* attr = (struct nlattr*)((char*)nlh + before);
-            attr->nla_len = NLA_HDRLEN + 1;
+            race_set_attr_len_unaligned(nlh, before, bad_attr_len);
             break;
         }
         default: {
             mnl_attr_put_u32(nlh, TCA_GATE_ENTRY_INTERVAL, interval);
             size_t before = nlh->nlmsg_len;
             mnl_attr_put_u32(nlh, TCA_GATE_ENTRY_MAX_OCTETS, 0);
-            struct nlattr* attr = (struct nlattr*)((char*)nlh + before);
-            attr->nla_len = NLA_HDRLEN + 1;
+            race_set_attr_len_unaligned(nlh, before, bad_attr_len);
             break;
         }
     }

@@ -5,6 +5,10 @@
 #include <stdbool.h>
 #include <linux/netlink.h>
 
+static void set_attr_len_unaligned(struct nlmsghdr* nlh, size_t attr_offset, uint16_t attr_len) {
+    memcpy((char*)nlh + attr_offset + offsetof(struct nlattr, nla_len), &attr_len, sizeof(attr_len));
+}
+
 static int send_invalid_entry(struct gb_nl_sock* sock,
                               struct gb_nl_msg* msg,
                               struct gb_nl_msg* resp,
@@ -15,6 +19,7 @@ static int send_invalid_entry(struct gb_nl_sock* sock,
     struct nlattr *nest_tab, *nest_prio, *nest_opts, *entry_list, *entry_nest;
     struct tc_gate gate_params;
     uint32_t interval = GB_SELFTEST_DEFAULT_INTERVAL_NS;
+    const uint16_t bad_attr_len = (uint16_t)(sizeof(struct nlattr) + 1u);
     gb_nl_msg_reset(msg);
 
     nlh = mnl_nlmsg_put_header(msg->buf);
@@ -50,8 +55,7 @@ static int send_invalid_entry(struct gb_nl_sock* sock,
             {
                 size_t before = nlh->nlmsg_len;
                 mnl_attr_put_u32(nlh, TCA_GATE_ENTRY_INTERVAL, interval);
-                struct nlattr* attr = (struct nlattr*)((char*)nlh + before);
-                attr->nla_len = NLA_HDRLEN + 1;
+                set_attr_len_unaligned(nlh, before, bad_attr_len);
             }
             break;
         case 1:
@@ -60,8 +64,7 @@ static int send_invalid_entry(struct gb_nl_sock* sock,
             {
                 size_t before = nlh->nlmsg_len;
                 mnl_attr_put_u32(nlh, TCA_GATE_ENTRY_IPV, 0);
-                struct nlattr* attr = (struct nlattr*)((char*)nlh + before);
-                attr->nla_len = NLA_HDRLEN + 1;
+                set_attr_len_unaligned(nlh, before, bad_attr_len);
             }
             break;
         case 2:
@@ -70,8 +73,7 @@ static int send_invalid_entry(struct gb_nl_sock* sock,
             {
                 size_t before = nlh->nlmsg_len;
                 mnl_attr_put_u32(nlh, TCA_GATE_ENTRY_MAX_OCTETS, 0);
-                struct nlattr* attr = (struct nlattr*)((char*)nlh + before);
-                attr->nla_len = NLA_HDRLEN + 1;
+                set_attr_len_unaligned(nlh, before, bad_attr_len);
             }
             break;
         default:

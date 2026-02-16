@@ -36,21 +36,20 @@ git submodule update --init --recursive libmnl libpcap
 ./tools/build_deps.sh
 
 # 3) configure + compile gatebench as a static binary
-# clang is shown because GCC 15 currently fails with -Werror in selftests
 rm -rf build-meson-release
-CC=clang meson setup build-meson-release --buildtype=release -Ddeps_prefix=deps/install
+meson setup build-meson-release --buildtype=release -Ddeps_prefix=deps/install
 meson compile -C build-meson-release
 
 # 4) verify static linkage
 file build-meson-release/src/gatebench
-ldd build-meson-release/src/gatebench
+ldd build-meson-release/src/gatebench || true
 ```
 
 Expected verification output shape:
-- `file ...`: contains `statically linked`
-- `ldd ...`: prints `not a dynamic executable`
+- `file ...`: contains `statically linked` or `static-pie linked`
+- `ldd ...`: prints `statically linked` or `not a dynamic executable`
 
-If your GCC toolchain builds cleanly, you can omit `CC=clang`.
+To use Clang explicitly instead, prefix setup with `CC=clang`.
 
 If you want to force system libraries instead of local deps:
 
