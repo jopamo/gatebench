@@ -22,11 +22,40 @@ meson setup build-meson-release --buildtype=release
 meson compile -C build-meson-release
 ```
 
-If static dependency resolution fails, build bundled deps and reconfigure:
+For a full static build, run:
 
 ```bash
+# one-time tooling (package names vary by distro):
+# git meson ninja pkg-config make autoconf automake libtool flex bison
+
+# 1) restore bundled dependency sources
+git submodule sync --recursive
+git submodule update --init --recursive libmnl libpcap
+
+# 2) build local static libmnl/libpcap into deps/install
 ./tools/build_deps.sh
-meson setup build-meson-release --reconfigure
+
+# 3) configure + compile gatebench as a static binary
+# clang is shown because GCC 15 currently fails with -Werror in selftests
+rm -rf build-meson-release
+CC=clang meson setup build-meson-release --buildtype=release -Ddeps_prefix=deps/install
+meson compile -C build-meson-release
+
+# 4) verify static linkage
+file build-meson-release/src/gatebench
+ldd build-meson-release/src/gatebench
+```
+
+Expected verification output shape:
+- `file ...`: contains `statically linked`
+- `ldd ...`: prints `not a dynamic executable`
+
+If your GCC toolchain builds cleanly, you can omit `CC=clang`.
+
+If you want to force system libraries instead of local deps:
+
+```bash
+meson setup build-meson-release --reconfigure -Ddeps_prefix=""
 meson compile -C build-meson-release
 ```
 
