@@ -56,7 +56,7 @@
 #define RACE_EXTACK_SLOTS 6u
 #define RACE_INVALID_CASES 8u
 #define RACE_BASETIME_JITTER_NS 10000000u
-#define RACE_THREAD_COUNT 8u
+#define RACE_THREAD_COUNT GB_RACE_THREAD_COUNT
 
 #ifndef NLM_F_ACK_TLVS
 #define NLM_F_ACK_TLVS 0x200
@@ -1357,7 +1357,7 @@ out:
     return NULL;
 }
 
-int gb_race_run(const struct gb_config* cfg) {
+int gb_race_run_with_summary(const struct gb_config* cfg, struct gb_race_summary* summary) {
     atomic_bool stop = ATOMIC_VAR_INIT(false);
     struct gb_race_nl_ctx replace_ctx;
     struct gb_race_dump_ctx dump_ctx;
@@ -1388,6 +1388,9 @@ int gb_race_run(const struct gb_config* cfg) {
     uint64_t sleep_ns;
     int ret;
     int created = 0;
+
+    if (summary)
+        memset(summary, 0, sizeof(*summary));
 
     if (!cfg)
         return -EINVAL;
@@ -1610,6 +1613,43 @@ out_stop:
     tst_fzsync_pair_cleanup(&dump_get_sync);
     tst_fzsync_pair_cleanup(&traffic_pair_sync);
 
+    if (summary) {
+        summary->completed = ret == 0;
+        summary->duration_seconds = cfg->race_seconds;
+        summary->cpu_count = cpu_count;
+
+        summary->replace.cpu = replace_ctx.cpu;
+        summary->replace.ops = replace_ctx.ops;
+        summary->replace.errors = replace_ctx.errors;
+
+        summary->dump.cpu = dump_ctx.cpu;
+        summary->dump.ops = dump_ctx.ops;
+        summary->dump.errors = dump_ctx.errors;
+
+        summary->get.cpu = get_ctx.cpu;
+        summary->get.ops = get_ctx.ops;
+        summary->get.errors = get_ctx.errors;
+
+        summary->traffic.cpu = traffic_ctx.cpu;
+        summary->traffic.ops = traffic_ctx.ops;
+        summary->traffic.errors = traffic_ctx.errors;
+
+        summary->traffic_sync.cpu = traffic_sync_ctx.cpu;
+        summary->traffic_sync.ops = traffic_sync_ctx.ops;
+
+        summary->basetime.cpu = basetime_ctx.cpu;
+        summary->basetime.ops = basetime_ctx.ops;
+        summary->basetime.errors = basetime_ctx.errors;
+
+        summary->delete_worker.cpu = delete_ctx.cpu;
+        summary->delete_worker.ops = delete_ctx.ops;
+        summary->delete_worker.errors = delete_ctx.errors;
+
+        summary->invalid.cpu = invalid_ctx.cpu;
+        summary->invalid.ops = invalid_ctx.ops;
+        summary->invalid.errors = invalid_ctx.errors;
+    }
+
     if (!cfg->json) {
         if (ret == 0) {
             printf("Race mode completed (%u seconds)\n", cfg->race_seconds);
@@ -1650,4 +1690,8 @@ out_stop:
     if (ret != 0)
         return -ret;
     return 0;
+}
+
+int gb_race_run(const struct gb_config* cfg) {
+    return gb_race_run_with_summary(cfg, NULL);
 }

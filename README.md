@@ -225,6 +225,11 @@ Why dangerous: very high iteration and run counts increase total wall time and m
 - Logging controls:
   - `--verbose` enables detailed config/environment + detailed selftest output.
   - in race mode, `--verbose` also enables fuzzy-sync sampling/delay diagnostics.
+- JSON mode:
+  - `--json` writes one structured JSON object to stdout with top-level keys:
+    `version`, `mode`, `ok`, `error`, `environment`, `config`, `selftests`,
+    `benchmark`, `dump_proof`, `race`.
+  - mode-specific payloads are populated only for the active mode; inactive sections are `null`.
 - State/artifacts:
   - kernel state: tc gate actions at selected `--index` values (tool attempts cleanup).
   - filesystem artifacts: optional pcap output path only; no persistent app DB/cache.
@@ -251,10 +256,10 @@ Why dangerous: very high iteration and run counts increase total wall time and m
   - Confirm: `Error: sample-every cannot exceed iterations`.
   - Fix: choose `sample-every <= iters`.
 
-- **Symptom:** command appears to run with `--json`, but downstream JSON parser fails.
-  - Likely cause: current JSON output path is incomplete/placeholder for results.
-  - Confirm: output contains config header but no structured benchmark/race result object.
-  - Fix: use text mode for operational runs today; treat JSON mode as unstable.
+- **Symptom:** downstream JSON parser fails when using `--json`.
+  - Likely cause: stdout and stderr were combined in one stream (stderr contains human diagnostics).
+  - Confirm: parse succeeds when reading stdout only.
+  - Fix: capture stdout as JSON output, and keep stderr separate.
 
 - **Symptom:** build fails during static link probing.
   - Likely cause: static libmnl/libpcap dependency chain not available in system pkg-config metadata.
@@ -266,7 +271,6 @@ Why dangerous: very high iteration and run counts increase total wall time and m
 - Does not measure data-plane forwarding performance.
 - No skip-selftests mode for normal benchmark/dump-proof paths.
 - Benchmark summary output is minimal in current CLI flow (run progress + success line), not a full rendered report.
-- JSON output is not yet a stable, complete result schema.
 - Entry count is capped to `64`.
 - Race mode increases race probability; it does not provide deterministic replay of exact interleavings.
 
