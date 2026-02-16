@@ -1,8 +1,8 @@
-<div style="background-color:#1e1e1e; padding:1em; display:inline-block; border-radius:8px; text-align:center;">
-  <img src="assets/gatebench.png" alt="logo" width="300" style="display:block; margin:0;">
+<div style="text-align:center;">
+  <div style="background-color:#1e1e1e; padding:1em; display:inline-block; border-radius:8px;">
+    <img src="assets/gatebench.png" alt="logo" width="300" style="display:block;">
+  </div>
 </div>
-
-# gatebench
 
 `gatebench` is a Linux CLI for exercising and benchmarking `tc gate` (`act_gate`) control-plane operations over rtnetlink.
 It is not a packet-forwarding performance tool and does not measure end-to-end traffic latency.
