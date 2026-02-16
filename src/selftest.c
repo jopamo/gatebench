@@ -11,6 +11,7 @@
 
 static const struct gb_selftest_case internal_tests[] = {
     {"schedule pattern", gb_selftest_internal_schedule_pattern, 0},
+    {"gate timer start logic", gb_selftest_gate_timer_start_logic, 0},
 };
 
 static const struct gb_selftest_case stable_tests[] = {

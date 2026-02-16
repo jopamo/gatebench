@@ -14,12 +14,14 @@ project(
     'default_library=static',
     'prefer_static=true',
   ],
-  meson_version: '>=0.56.0',
+  meson_version: '>=0.57.0',
 )
 
 # Compiler and flags
 cc = meson.get_compiler('c')
 fs = import('fs')
+sanitizer = get_option('b_sanitize')
+static_link_requested = sanitizer == 'none'
 
 # Global compiler arguments
 add_project_arguments(
@@ -126,8 +128,39 @@ if not pcap_opt.disabled()
     libpcap_dep = dependency('libpcap', required: pcap_opt.enabled(), static: true)
   endif
 endif
+
+if static_link_requested and pcap_opt.auto() and libpcap_dep.found()
+  if not cc.links(
+    'int main(void) { return 0; }',
+    dependencies: [math_dep, threads_dep, libpcap_dep],
+    args: ['-static'],
+    name: 'static libpcap dependency probe'
+  )
+    warning('Static libpcap dependencies are unavailable in auto mode; disabling pcap support. Run tools/build_deps.sh to install local static deps.')
+    libpcap_dep = disabler()
+    libpcap_local_used = false
+  endif
+endif
+
+gatebench_deps = [libmnl_dep, math_dep, threads_dep]
 if libpcap_dep.found()
+  gatebench_deps += [libpcap_dep]
   add_project_arguments('-DGATEBENCH_HAVE_PCAP', language: 'c')
+endif
+
+if static_link_requested
+  if not cc.links(
+    'int main(void) { return 0; }',
+    dependencies: gatebench_deps,
+    args: ['-static'],
+    name: 'gatebench static link probe'
+  )
+    if deps_use_local
+      error('Failed to resolve a fully static link with deps from ' + deps_prefix_abs + '. Rebuild local deps with tools/build_deps.sh.')
+    else
+      error('Failed to resolve a fully static link with system dependencies. Run tools/build_deps.sh (defaults to deps/install) or pass -Ddeps_prefix to a prefix with static libmnl/libpcap.')
+    endif
+  endif
 endif
 
 # Include directories
@@ -148,7 +181,6 @@ endif
 subdir('src')
 
 # Handle sanitizer options
-sanitizer = get_option('b_sanitize')
 if sanitizer != 'none'
   summary({'Sanitizer enabled': sanitizer}, section: 'Build Configuration')
 endif

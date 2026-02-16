@@ -45,8 +45,8 @@ build_autotools "libpcap" --disable-shared --without-libnl --disable-dbus
 
 PCAP_PC="${PREFIX_DIR}/lib/pkgconfig/libpcap.pc"
 if [[ -f "${PCAP_PC}" ]]; then
-  if rg -q "dbus-1|libnl" "${PCAP_PC}"; then
-    echo "libpcap.pc still references dbus/libnl; rebuild failed to disable those deps." >&2
+  if rg -q "dbus-1|libnl|systemd" "${PCAP_PC}"; then
+    echo "libpcap.pc still references dbus/libnl/systemd; rebuild failed to disable those deps." >&2
     echo "Contents:" >&2
     cat "${PCAP_PC}" >&2
     exit 1

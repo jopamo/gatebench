@@ -36,6 +36,20 @@ meson compile -C build --clean
 sudo meson install -C build
 ```
 
+### Fully static binary
+`gatebench` links statically by default (when sanitizers are off). If your
+system does not ship static `libmnl`/`libpcap`, build the bundled deps first:
+
+```bash
+./tools/build_deps.sh
+meson setup build-meson-release --reconfigure
+meson compile -C build-meson-release
+file build-meson-release/src/gatebench
+```
+
+If `pkg-config --libs --static libpcap` prints `-ldbus-1` or `-lsystemd`,
+that's from your system `libpcap.pc`; use `deps/install` (above) to avoid it.
+
 ### Core design principles
 
 1. **Separate TX and RX buffers**: Prevents artificial coupling between request and response sizes

@@ -22,6 +22,8 @@ struct gb_pcap_ctx {
     pcap_dumper_t* dumper;
     pthread_t thread;
     int running;
+#else
+    char unused;
 #endif
 };
 
