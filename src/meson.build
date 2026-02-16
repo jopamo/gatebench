@@ -57,6 +57,8 @@ gatebench_headers = files(
   '../include/gatebench_selftest.h',
   '../include/gatebench_proof.h',
   '../include/gatebench_race.h',
+  '../include/gatebench_fzsync_compat.h',
+  '../include/tst_fuzzy_sync.h',
 )
 
 # Build targets

@@ -5,6 +5,28 @@
 #include "../include/gatebench_gate.h"
 #include "../include/gatebench_nl.h"
 #include "../include/gatebench_util.h"
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-format-attribute"
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
+#pragma clang diagnostic ignored "-Wfloat-conversion"
+#pragma clang diagnostic ignored "-Wimplicit-float-conversion"
+#pragma clang diagnostic ignored "-Wimplicit-int-float-conversion"
+#endif
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-format-attribute"
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+#pragma GCC diagnostic ignored "-Wfloat-conversion"
+#pragma GCC diagnostic ignored "-Wconversion"
+#endif
+#include "../include/tst_fuzzy_sync.h"
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 #include <arpa/inet.h>
 #include <errno.h>
@@ -33,7 +55,7 @@
 #define RACE_EXTACK_SLOTS 6u
 #define RACE_INVALID_CASES 8u
 #define RACE_BASETIME_JITTER_NS 10000000u
-#define RACE_THREAD_COUNT 7u
+#define RACE_THREAD_COUNT 8u
 
 #ifndef NLM_F_ACK_TLVS
 #define NLM_F_ACK_TLVS 0x200
@@ -56,6 +78,8 @@ struct gb_race_extack_stats {
 struct gb_race_nl_ctx {
     const struct gb_config* cfg;
     atomic_bool* stop;
+    struct tst_fzsync_pair* sync_pair;
+    bool sync_is_a;
     uint32_t seed;
     uint32_t index;
     uint32_t max_entries;
@@ -71,6 +95,8 @@ struct gb_race_nl_ctx {
 struct gb_race_dump_ctx {
     const struct gb_config* cfg;
     atomic_bool* stop;
+    struct tst_fzsync_pair* sync_pair;
+    bool sync_is_a;
     uint32_t index;
     int timeout_ms;
     int cpu;
@@ -82,6 +108,8 @@ struct gb_race_dump_ctx {
 
 struct gb_race_get_ctx {
     atomic_bool* stop;
+    struct tst_fzsync_pair* sync_pair;
+    bool sync_is_a;
     uint32_t index;
     int timeout_ms;
     int cpu;
@@ -93,6 +121,8 @@ struct gb_race_get_ctx {
 
 struct gb_race_traffic_ctx {
     atomic_bool* stop;
+    struct tst_fzsync_pair* sync_pair;
+    bool sync_is_a;
     uint32_t seed;
     int cpu;
     uint64_t ops;
@@ -100,9 +130,19 @@ struct gb_race_traffic_ctx {
     uint64_t err_counts[RACE_ERRNO_MAX];
 };
 
+struct gb_race_sync_ctx {
+    atomic_bool* stop;
+    struct tst_fzsync_pair* sync_pair;
+    bool sync_is_a;
+    int cpu;
+    uint64_t ops;
+};
+
 struct gb_race_invalid_ctx {
     const struct gb_config* cfg;
     atomic_bool* stop;
+    struct tst_fzsync_pair* sync_pair;
+    bool sync_is_a;
     uint32_t seed;
     uint32_t index;
     uint32_t live_index;
@@ -117,6 +157,8 @@ struct gb_race_invalid_ctx {
 struct gb_race_update_ctx {
     const struct gb_config* cfg;
     atomic_bool* stop;
+    struct tst_fzsync_pair* sync_pair;
+    bool sync_is_a;
     uint32_t seed;
     uint32_t index;
     int timeout_ms;
@@ -745,6 +787,51 @@ static uint32_t race_fill_entries(struct gate_entry* entries,
     return count;
 }
 
+static bool race_sync_exit_requested(const struct tst_fzsync_pair* pair) {
+    if (!pair)
+        return false;
+    return tst_atomic_load(&pair->exit) != 0;
+}
+
+static void race_sync_signal_exit(struct tst_fzsync_pair* pair) {
+    if (!pair)
+        return;
+    tst_atomic_store(1, &pair->exit);
+}
+
+static void race_sync_start(struct tst_fzsync_pair* pair, bool is_a) {
+    if (!pair)
+        return;
+
+    if (is_a)
+        tst_fzsync_start_race_a(pair);
+    else
+        tst_fzsync_start_race_b(pair);
+}
+
+static void race_sync_end(struct tst_fzsync_pair* pair, bool is_a) {
+    if (!pair)
+        return;
+
+    if (is_a)
+        tst_fzsync_end_race_a(pair);
+    else
+        tst_fzsync_end_race_b(pair);
+}
+
+static void race_sync_pair_init(struct tst_fzsync_pair* pair, float alpha, int min_samples, float max_dev_ratio) {
+    if (!pair)
+        return;
+
+    memset(pair, 0, sizeof(*pair));
+    pair->avg_alpha = alpha;
+    pair->min_samples = min_samples;
+    pair->max_dev_ratio = max_dev_ratio;
+    pair->exec_loops = INT_MAX;
+    tst_fzsync_pair_init(pair);
+    tst_fzsync_pair_reset(pair, NULL);
+}
+
 static void* race_replace_thread(void* arg) {
     struct gb_race_nl_ctx* ctx = arg;
     struct gb_nl_sock* sock = NULL;
@@ -760,14 +847,13 @@ static void* race_replace_thread(void* arg) {
     ret = gb_nl_open(&sock);
     if (ret < 0) {
         race_record_err(&ctx->errors, ctx->err_counts, ret);
-        return NULL;
+        goto out;
     }
 
     entries = calloc(ctx->max_entries, sizeof(*entries));
     if (!entries) {
         race_record_err(&ctx->errors, ctx->err_counts, -ENOMEM);
-        gb_nl_close(sock);
-        return NULL;
+        goto out;
     }
 
     cap = gate_msg_capacity(ctx->max_entries, 0);
@@ -780,17 +866,19 @@ static void* race_replace_thread(void* arg) {
 
     race_shape_init(&shape, ctx->cfg);
 
-    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed)) {
+    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed) && !race_sync_exit_requested(ctx->sync_pair)) {
         uint32_t count = race_fill_entries(entries, ctx->max_entries, ctx->interval_max, &ctx->seed);
 
         ret = build_gate_newaction(req, ctx->index, &shape, entries, count, NLM_F_CREATE | NLM_F_REPLACE, 0, -1);
-        if (ret < 0) {
+        race_sync_start(ctx->sync_pair, ctx->sync_is_a);
+        if (ret < 0)
             race_record_err(&ctx->errors, ctx->err_counts, ret);
-            continue;
+        else {
+            ret = gb_nl_send_recv(sock, req, resp, ctx->timeout_ms);
+            if (ret < 0 && ret != -EEXIST && ret != -ENOENT)
+                race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
         }
-        ret = gb_nl_send_recv(sock, req, resp, ctx->timeout_ms);
-        if (ret < 0 && ret != -EEXIST && ret != -ENOENT)
-            race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
+        race_sync_end(ctx->sync_pair, ctx->sync_is_a);
 
         ctx->ops++;
         if ((ctx->ops & 0xffu) == 0u)
@@ -798,6 +886,7 @@ static void* race_replace_thread(void* arg) {
     }
 
 out:
+    race_sync_signal_exit(ctx->sync_pair);
     free(entries);
     if (req)
         gb_nl_msg_free(req);
@@ -819,37 +908,39 @@ static void* race_dump_thread(void* arg) {
     ret = gb_nl_open(&sock);
     if (ret < 0) {
         race_record_err(&ctx->errors, ctx->err_counts, ret);
-        return NULL;
+        goto out;
     }
 
     req = gb_nl_msg_alloc(1024u);
     if (!req) {
         race_record_err(&ctx->errors, ctx->err_counts, -ENOMEM);
-        gb_nl_close(sock);
-        return NULL;
+        goto out;
     }
 
     ret = build_gate_getaction_ex(req, ctx->index, NLM_F_DUMP);
     if (ret < 0) {
         race_record_err(&ctx->errors, ctx->err_counts, ret);
-        gb_nl_msg_free(req);
-        gb_nl_close(sock);
-        return NULL;
+        goto out;
     }
 
-    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed)) {
+    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed) && !race_sync_exit_requested(ctx->sync_pair)) {
+        race_sync_start(ctx->sync_pair, ctx->sync_is_a);
         ret = gb_nl_dump_action(sock, req, &stats, ctx->timeout_ms);
         if (ret < 0)
             race_record_err(&ctx->errors, ctx->err_counts, ret);
         else if (stats.saw_error)
             race_record_err(&ctx->errors, ctx->err_counts, stats.error_code);
+        race_sync_end(ctx->sync_pair, ctx->sync_is_a);
 
         ctx->ops++;
         if ((ctx->ops & 0xffu) == 0u)
             usleep(100);
     }
 
-    gb_nl_msg_free(req);
+out:
+    race_sync_signal_exit(ctx->sync_pair);
+    if (req)
+        gb_nl_msg_free(req);
     gb_nl_close(sock);
     return NULL;
 }
@@ -867,7 +958,7 @@ static void* race_get_thread(void* arg) {
     ret = gb_nl_open(&sock);
     if (ret < 0) {
         race_record_err(&ctx->errors, ctx->err_counts, ret);
-        return NULL;
+        goto out;
     }
 
     req = gb_nl_msg_alloc(1024u);
@@ -883,7 +974,8 @@ static void* race_get_thread(void* arg) {
         goto out;
     }
 
-    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed)) {
+    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed) && !race_sync_exit_requested(ctx->sync_pair)) {
+        race_sync_start(ctx->sync_pair, ctx->sync_is_a);
         ret = gb_nl_send_recv(sock, req, resp, ctx->timeout_ms);
         if (ret < 0) {
             if (ret != -ENOENT)
@@ -899,6 +991,7 @@ static void* race_get_thread(void* arg) {
                 gb_gate_dump_free(&dump);
             }
         }
+        race_sync_end(ctx->sync_pair, ctx->sync_is_a);
 
         ctx->ops++;
         if ((ctx->ops & 0xffu) == 0u)
@@ -906,6 +999,7 @@ static void* race_get_thread(void* arg) {
     }
 
 out:
+    race_sync_signal_exit(ctx->sync_pair);
     if (req)
         gb_nl_msg_free(req);
     if (resp)
@@ -930,14 +1024,13 @@ static void* race_delete_thread(void* arg) {
     ret = gb_nl_open(&sock);
     if (ret < 0) {
         race_record_err(&ctx->errors, ctx->err_counts, ret);
-        return NULL;
+        goto out;
     }
 
     entries = calloc(ctx->max_entries, sizeof(*entries));
     if (!entries) {
         race_record_err(&ctx->errors, ctx->err_counts, -ENOMEM);
-        gb_nl_close(sock);
-        return NULL;
+        goto out;
     }
 
     del_msg = gb_nl_msg_alloc(1024u);
@@ -956,10 +1049,12 @@ static void* race_delete_thread(void* arg) {
     }
     race_shape_init(&shape, ctx->cfg);
 
-    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed)) {
+    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed) && !race_sync_exit_requested(ctx->sync_pair)) {
+        race_sync_start(ctx->sync_pair, ctx->sync_is_a);
         ret = gb_nl_send_recv(sock, del_msg, resp, ctx->timeout_ms);
         if (ret < 0 && ret != -ENOENT)
             race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
+        race_sync_end(ctx->sync_pair, ctx->sync_is_a);
 
         {
             uint32_t count = race_fill_entries(entries, ctx->max_entries, ctx->interval_max, &ctx->seed);
@@ -979,6 +1074,7 @@ static void* race_delete_thread(void* arg) {
     }
 
 out:
+    race_sync_signal_exit(ctx->sync_pair);
     free(entries);
     if (del_msg)
         gb_nl_msg_free(del_msg);
@@ -992,7 +1088,7 @@ out:
 
 static void* race_traffic_thread(void* arg) {
     struct gb_race_traffic_ctx* ctx = arg;
-    int fd;
+    int fd = -1;
     struct sockaddr_in addr;
     char payload[RACE_MAX_PKT];
     struct timeval tv;
@@ -1003,7 +1099,7 @@ static void* race_traffic_thread(void* arg) {
     fd = socket(AF_INET, SOCK_DGRAM, 0);
     if (fd < 0) {
         race_record_err(&ctx->errors, ctx->err_counts, -errno);
-        return NULL;
+        goto out;
     }
 
     memset(&tv, 0, sizeof(tv));
@@ -1018,10 +1114,11 @@ static void* race_traffic_thread(void* arg) {
 
     memset(payload, 0x5a, sizeof(payload));
 
-    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed)) {
+    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed) && !race_sync_exit_requested(ctx->sync_pair)) {
         uint32_t span = RACE_MAX_PKT - RACE_MIN_PKT + 1u;
         uint32_t len = RACE_MIN_PKT + rng_range(&ctx->seed, span);
 
+        race_sync_start(ctx->sync_pair, ctx->sync_is_a);
         ret = sendto(fd, payload, len, 0, (struct sockaddr*)&addr, sizeof(addr));
         if (ret < 0) {
             int err = errno;
@@ -1029,12 +1126,38 @@ static void* race_traffic_thread(void* arg) {
         }
         else
             ctx->ops++;
+        race_sync_end(ctx->sync_pair, ctx->sync_is_a);
 
         if ((ctx->ops & 0xfffu) == 0u)
             usleep(100);
     }
 
-    close(fd);
+out:
+    race_sync_signal_exit(ctx->sync_pair);
+    if (fd >= 0)
+        close(fd);
+    return NULL;
+}
+
+static void* race_sync_partner_thread(void* arg) {
+    struct gb_race_sync_ctx* ctx = arg;
+    volatile unsigned int spin = 0;
+
+    race_pin_thread("traffic_sync", ctx->cpu);
+
+    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed) && !race_sync_exit_requested(ctx->sync_pair)) {
+        race_sync_start(ctx->sync_pair, ctx->sync_is_a);
+        for (unsigned int i = 0; i < 64u; i++)
+            spin += i;
+        race_sync_end(ctx->sync_pair, ctx->sync_is_a);
+
+        ctx->ops++;
+        if ((ctx->ops & 0x3ffu) == 0u)
+            sched_yield();
+    }
+
+    race_sync_signal_exit(ctx->sync_pair);
+    (void)spin;
     return NULL;
 }
 
@@ -1053,7 +1176,7 @@ static void* race_invalid_thread(void* arg) {
     ret = gb_nl_open(&sock);
     if (ret < 0) {
         race_record_err(&ctx->errors, ctx->err_counts, ret);
-        return NULL;
+        goto out;
     }
 
     /*
@@ -1071,55 +1194,53 @@ static void* race_invalid_thread(void* arg) {
 
     base_index = ctx->index;
 
-    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed)) {
+    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed) && !race_sync_exit_requested(ctx->sync_pair)) {
+        race_sync_start(ctx->sync_pair, ctx->sync_is_a);
         if ((ctx->ops & 1u) == 0u) {
             ret = race_send_timerstart_replace_live(sock, msg, resp, ctx->cfg, ctx->live_index, &ctx->seed,
                                                     ctx->timeout_ms);
             if (ret < 0 && ret != -ENOENT)
                 race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
-
-            ctx->ops++;
-            if ((ctx->ops & 0xffu) == 0u)
-                usleep(100);
-            continue;
         }
+        else {
+            uint32_t which = ctx->seed++ % RACE_INVALID_CASES;
+            uint32_t index = base_index + which;
 
-        uint32_t which = ctx->seed++ % RACE_INVALID_CASES;
-        uint32_t index = base_index + which;
+            switch (which) {
+                case 0:
+                    ret = race_send_bad_clockid(sock, msg, resp, index, ctx->timeout_ms);
+                    break;
+                case 1:
+                    ret = race_send_bad_base_time(sock, msg, resp, index, ctx->timeout_ms);
+                    break;
+                case 2:
+                    ret = race_send_bad_cycle_time(sock, msg, resp, index, ctx->timeout_ms);
+                    break;
+                case 3:
+                    ret = race_send_invalid_action(sock, msg, resp, index, ctx->timeout_ms);
+                    break;
+                case 4:
+                    ret = race_send_invalid_entry_attr(sock, msg, resp, index, 0, ctx->timeout_ms);
+                    break;
+                case 5:
+                    ret = race_send_invalid_entry_attr(sock, msg, resp, index, 1, ctx->timeout_ms);
+                    break;
+                case 6:
+                    ret = race_send_invalid_entry_attr(sock, msg, resp, index, 2, ctx->timeout_ms);
+                    break;
+                default:
+                    ret = race_send_bad_interval(sock, msg, resp, index, ctx->timeout_ms);
+                    break;
+            }
 
-        switch (which) {
-            case 0:
-                ret = race_send_bad_clockid(sock, msg, resp, index, ctx->timeout_ms);
-                break;
-            case 1:
-                ret = race_send_bad_base_time(sock, msg, resp, index, ctx->timeout_ms);
-                break;
-            case 2:
-                ret = race_send_bad_cycle_time(sock, msg, resp, index, ctx->timeout_ms);
-                break;
-            case 3:
-                ret = race_send_invalid_action(sock, msg, resp, index, ctx->timeout_ms);
-                break;
-            case 4:
-                ret = race_send_invalid_entry_attr(sock, msg, resp, index, 0, ctx->timeout_ms);
-                break;
-            case 5:
-                ret = race_send_invalid_entry_attr(sock, msg, resp, index, 1, ctx->timeout_ms);
-                break;
-            case 6:
-                ret = race_send_invalid_entry_attr(sock, msg, resp, index, 2, ctx->timeout_ms);
-                break;
-            default:
-                ret = race_send_bad_interval(sock, msg, resp, index, ctx->timeout_ms);
-                break;
+            if (ret < 0)
+                race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
+
+            gb_nl_msg_reset(del_msg);
+            if (build_gate_delaction(del_msg, index) >= 0)
+                (void)gb_nl_send_recv(sock, del_msg, resp, ctx->timeout_ms);
         }
-
-        if (ret < 0)
-            race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
-
-        gb_nl_msg_reset(del_msg);
-        if (build_gate_delaction(del_msg, index) >= 0)
-            (void)gb_nl_send_recv(sock, del_msg, resp, ctx->timeout_ms);
+        race_sync_end(ctx->sync_pair, ctx->sync_is_a);
 
         ctx->ops++;
         if ((ctx->ops & 0xffu) == 0u)
@@ -1127,6 +1248,7 @@ static void* race_invalid_thread(void* arg) {
     }
 
 out:
+    race_sync_signal_exit(ctx->sync_pair);
     if (msg)
         gb_nl_msg_free(msg);
     if (resp)
@@ -1151,7 +1273,7 @@ static void* race_basetime_thread(void* arg) {
     ret = gb_nl_open(&sock);
     if (ret < 0) {
         race_record_err(&ctx->errors, ctx->err_counts, ret);
-        return NULL;
+        goto out;
     }
 
     cap = gate_msg_capacity(GB_MAX_ENTRIES, 0);
@@ -1162,7 +1284,8 @@ static void* race_basetime_thread(void* arg) {
         goto out;
     }
 
-    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed)) {
+    while (!atomic_load_explicit(ctx->stop, memory_order_relaxed) && !race_sync_exit_requested(ctx->sync_pair)) {
+        race_sync_start(ctx->sync_pair, ctx->sync_is_a);
         uint64_t now = race_clock_now_ns((clockid_t)ctx->cfg->clockid);
         uint64_t jitter = 1u + (uint64_t)rng_range(&ctx->seed, RACE_BASETIME_JITTER_NS);
         uint64_t basetime = now + jitter;
@@ -1189,6 +1312,7 @@ static void* race_basetime_thread(void* arg) {
                     race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
             }
         }
+        race_sync_end(ctx->sync_pair, ctx->sync_is_a);
 
         ctx->ops++;
         if ((ctx->ops & 0xffu) == 0u)
@@ -1196,6 +1320,7 @@ static void* race_basetime_thread(void* arg) {
     }
 
 out:
+    race_sync_signal_exit(ctx->sync_pair);
     if (msg)
         gb_nl_msg_free(msg);
     if (resp)
@@ -1211,13 +1336,19 @@ int gb_race_run(const struct gb_config* cfg) {
     struct gb_race_get_ctx get_ctx;
     struct gb_race_nl_ctx delete_ctx;
     struct gb_race_traffic_ctx traffic_ctx;
+    struct gb_race_sync_ctx traffic_sync_ctx;
     struct gb_race_invalid_ctx invalid_ctx;
     struct gb_race_update_ctx basetime_ctx;
+    struct tst_fzsync_pair replace_delete_sync;
+    struct tst_fzsync_pair basetime_invalid_sync;
+    struct tst_fzsync_pair dump_get_sync;
+    struct tst_fzsync_pair traffic_pair_sync;
     pthread_t replace_thread;
     pthread_t dump_thread;
     pthread_t get_thread;
     pthread_t delete_thread;
     pthread_t traffic_thread;
+    pthread_t traffic_sync_thread;
     pthread_t invalid_thread;
     pthread_t basetime_thread;
     int cpus[RACE_THREAD_COUNT];
@@ -1253,6 +1384,14 @@ int gb_race_run(const struct gb_config* cfg) {
     if (invalid_base < cfg->index)
         invalid_base = cfg->index;
 
+    /* Pair all netlink workers into two-way fuzzy race windows. */
+    race_sync_pair_init(&replace_delete_sync, 0.30f, 256, 0.15f);
+    race_sync_pair_init(&basetime_invalid_sync, 0.30f, 256, 0.15f);
+    race_sync_pair_init(&dump_get_sync, 0.25f, 192, 0.15f);
+    race_sync_pair_init(&traffic_pair_sync, 0.25f, 192, 0.20f);
+    gb_fzsync_seed(RACE_SEED_BASE ^ cfg->index ^ cfg->race_seconds);
+    gb_fzsync_set_info(cfg->verbose && !cfg->json);
+
     cpu_count = race_collect_cpus(cpus, (int)RACE_THREAD_COUNT);
     if (cpu_count <= 0) {
         for (unsigned int i = 0; i < RACE_THREAD_COUNT; i++)
@@ -1263,6 +1402,8 @@ int gb_race_run(const struct gb_config* cfg) {
     replace_ctx = (struct gb_race_nl_ctx){
         .cfg = cfg,
         .stop = &stop,
+        .sync_pair = &replace_delete_sync,
+        .sync_is_a = true,
         .seed = RACE_SEED_BASE ^ 0x11111111u,
         .index = cfg->index,
         .max_entries = max_entries,
@@ -1276,6 +1417,8 @@ int gb_race_run(const struct gb_config* cfg) {
     dump_ctx = (struct gb_race_dump_ctx){
         .cfg = cfg,
         .stop = &stop,
+        .sync_pair = &dump_get_sync,
+        .sync_is_a = true,
         .index = cfg->index,
         .timeout_ms = cfg->timeout_ms,
         .cpu = cpu_count > 0 ? cpus[1 % cpu_count] : -1,
@@ -1285,6 +1428,8 @@ int gb_race_run(const struct gb_config* cfg) {
 
     get_ctx = (struct gb_race_get_ctx){
         .stop = &stop,
+        .sync_pair = &dump_get_sync,
+        .sync_is_a = false,
         .index = cfg->index,
         .timeout_ms = cfg->timeout_ms,
         .cpu = cpu_count > 0 ? cpus[2 % cpu_count] : -1,
@@ -1295,6 +1440,8 @@ int gb_race_run(const struct gb_config* cfg) {
     delete_ctx = (struct gb_race_nl_ctx){
         .cfg = cfg,
         .stop = &stop,
+        .sync_pair = &replace_delete_sync,
+        .sync_is_a = false,
         .seed = RACE_SEED_BASE ^ 0x33333333u,
         .index = cfg->index,
         .max_entries = max_entries,
@@ -1307,15 +1454,27 @@ int gb_race_run(const struct gb_config* cfg) {
 
     traffic_ctx = (struct gb_race_traffic_ctx){
         .stop = &stop,
+        .sync_pair = &traffic_pair_sync,
+        .sync_is_a = true,
         .seed = RACE_SEED_BASE ^ 0x77777777u,
         .cpu = cpu_count > 0 ? cpus[3 % cpu_count] : -1,
         .ops = 0,
         .errors = 0,
     };
 
+    traffic_sync_ctx = (struct gb_race_sync_ctx){
+        .stop = &stop,
+        .sync_pair = &traffic_pair_sync,
+        .sync_is_a = false,
+        .cpu = cpu_count > 0 ? cpus[7 % cpu_count] : -1,
+        .ops = 0,
+    };
+
     invalid_ctx = (struct gb_race_invalid_ctx){
         .cfg = cfg,
         .stop = &stop,
+        .sync_pair = &basetime_invalid_sync,
+        .sync_is_a = false,
         .seed = RACE_SEED_BASE ^ 0x99999999u,
         .index = invalid_base,
         .live_index = cfg->index,
@@ -1328,6 +1487,8 @@ int gb_race_run(const struct gb_config* cfg) {
     basetime_ctx = (struct gb_race_update_ctx){
         .cfg = cfg,
         .stop = &stop,
+        .sync_pair = &basetime_invalid_sync,
+        .sync_is_a = true,
         .seed = RACE_SEED_BASE ^ 0x55555555u,
         .index = cfg->index,
         .timeout_ms = cfg->timeout_ms,
@@ -1341,9 +1502,11 @@ int gb_race_run(const struct gb_config* cfg) {
             printf("Note: only %d CPU%s available; race threads will share CPUs\n", cpu_count,
                    cpu_count == 1 ? "" : "s");
         }
-        printf("Race thread CPUs: replace=%d dump=%d get=%d traffic=%d basetime=%d delete=%d invalid=%d\n",
-               replace_ctx.cpu, dump_ctx.cpu, get_ctx.cpu, traffic_ctx.cpu, basetime_ctx.cpu, delete_ctx.cpu,
-               invalid_ctx.cpu);
+        printf(
+            "Race thread CPUs: replace=%d dump=%d get=%d traffic=%d basetime=%d delete=%d invalid=%d traffic_sync=%d\n",
+            replace_ctx.cpu, dump_ctx.cpu, get_ctx.cpu, traffic_ctx.cpu, basetime_ctx.cpu, delete_ctx.cpu,
+            invalid_ctx.cpu, traffic_sync_ctx.cpu);
+        printf("Race fuzzy sync: replace/delete + basetime/invalid + dump/get + traffic/traffic_sync pairs enabled\n");
         printf("Race invalid thread: valid REPLACE timer-start trigger targets live index %u\n",
                invalid_ctx.live_index);
     }
@@ -1368,6 +1531,11 @@ int gb_race_run(const struct gb_config* cfg) {
         goto out_stop;
     created++;
 
+    ret = pthread_create(&traffic_sync_thread, NULL, race_sync_partner_thread, &traffic_sync_ctx);
+    if (ret != 0)
+        goto out_stop;
+    created++;
+
     ret = pthread_create(&basetime_thread, NULL, race_basetime_thread, &basetime_ctx);
     if (ret != 0)
         goto out_stop;
@@ -1388,6 +1556,10 @@ int gb_race_run(const struct gb_config* cfg) {
 
 out_stop:
     atomic_store_explicit(&stop, true, memory_order_relaxed);
+    race_sync_signal_exit(&replace_delete_sync);
+    race_sync_signal_exit(&basetime_invalid_sync);
+    race_sync_signal_exit(&dump_get_sync);
+    race_sync_signal_exit(&traffic_pair_sync);
 
     if (created > 0)
         pthread_join(replace_thread, NULL);
@@ -1398,11 +1570,17 @@ out_stop:
     if (created > 3)
         pthread_join(traffic_thread, NULL);
     if (created > 4)
-        pthread_join(basetime_thread, NULL);
+        pthread_join(traffic_sync_thread, NULL);
     if (created > 5)
-        pthread_join(delete_thread, NULL);
+        pthread_join(basetime_thread, NULL);
     if (created > 6)
+        pthread_join(delete_thread, NULL);
+    if (created > 7)
         pthread_join(invalid_thread, NULL);
+    tst_fzsync_pair_cleanup(&replace_delete_sync);
+    tst_fzsync_pair_cleanup(&basetime_invalid_sync);
+    tst_fzsync_pair_cleanup(&dump_get_sync);
+    tst_fzsync_pair_cleanup(&traffic_pair_sync);
 
     if (!cfg->json) {
         if (ret == 0) {
@@ -1419,6 +1597,7 @@ out_stop:
                (unsigned long long)get_ctx.errors);
         printf("  Traffic ops: %llu, errors: %llu\n", (unsigned long long)traffic_ctx.ops,
                (unsigned long long)traffic_ctx.errors);
+        printf("  Traffic sync ops:%llu\n", (unsigned long long)traffic_sync_ctx.ops);
         printf("  Basetime ops:%llu, errors: %llu\n", (unsigned long long)basetime_ctx.ops,
                (unsigned long long)basetime_ctx.errors);
         printf("  Delete ops:  %llu, errors: %llu\n", (unsigned long long)delete_ctx.ops,
