@@ -35,12 +35,14 @@ int gb_selftest_replace_preserve_attrs(struct gb_nl_sock* sock, uint32_t base_in
     /* 1. Create gate with non-default attributes. */
     ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, NLM_F_CREATE | NLM_F_EXCL, gate_flags, priority);
     if (ret < 0) {
+        gb_selftest_log("step create/build failed: %d\n", ret);
         test_ret = ret;
         goto out;
     }
 
     ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
     if (ret < 0) {
+        gb_selftest_log("step create/send failed: %d\n", ret);
         test_ret = ret;
         goto out;
     }
@@ -68,7 +70,7 @@ int gb_selftest_replace_preserve_attrs(struct gb_nl_sock* sock, uint32_t base_in
 
     nest_tab = mnl_attr_nest_start(nlh, TCA_ACT_TAB);
     nest_prio = mnl_attr_nest_start(nlh, GATEBENCH_ACT_PRIO);
-    mnl_attr_put_str(nlh, TCA_ACT_KIND, "gate");
+    mnl_attr_put_strz(nlh, TCA_ACT_KIND, "gate");
     mnl_attr_put_u32(nlh, TCA_ACT_INDEX, base_index);
     nest_opts = mnl_attr_nest_start(nlh, TCA_OPTIONS);
 
@@ -98,6 +100,7 @@ int gb_selftest_replace_preserve_attrs(struct gb_nl_sock* sock, uint32_t base_in
     msg->len = nlh->nlmsg_len;
     ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
     if (ret < 0) {
+        gb_selftest_log("step replace/send failed: %d\n", ret);
         test_ret = ret;
         goto cleanup;
     }
@@ -105,6 +108,7 @@ int gb_selftest_replace_preserve_attrs(struct gb_nl_sock* sock, uint32_t base_in
     /* 3. Verify preserved attributes and new entry list. */
     ret = gb_nl_get_action(sock, base_index, &dump, GB_SELFTEST_TIMEOUT_MS);
     if (ret < 0) {
+        gb_selftest_log("step replace/get failed: %d\n", ret);
         test_ret = ret;
         goto cleanup;
     }

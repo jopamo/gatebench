@@ -421,7 +421,7 @@ static struct nlmsghdr* race_gate_nlmsg_start(struct gb_nl_msg* msg,
 
     *nest_tab = mnl_attr_nest_start(nlh, TCA_ACT_TAB);
     *nest_prio = mnl_attr_nest_start(nlh, GATEBENCH_ACT_PRIO);
-    mnl_attr_put_str(nlh, TCA_ACT_KIND, "gate");
+    mnl_attr_put_strz(nlh, TCA_ACT_KIND, "gate");
     mnl_attr_put_u32(nlh, TCA_ACT_INDEX, index);
     *nest_opts = mnl_attr_nest_start(nlh, TCA_OPTIONS);
 

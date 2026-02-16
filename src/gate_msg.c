@@ -39,12 +39,44 @@ static void add_attr_nest_raw_end(struct nlmsghdr* nlh, struct nlattr* nest) {
     nest->nla_len = (uint16_t)((char*)mnl_nlmsg_get_payload_tail(nlh) - (char*)nest);
 }
 
-static int mnl_attr_cb_copy(const struct nlattr* attr, void* data) {
-    const struct nlattr** tb = data;
-    unsigned int type = mnl_attr_get_type(attr);
+struct gb_attr_copy_ctx {
+    const struct nlattr** tb;
+    unsigned int max_type;
+};
 
-    tb[type] = attr;
+static int mnl_attr_cb_copy(const struct nlattr* attr, void* data) {
+    struct gb_attr_copy_ctx* ctx = data;
+    unsigned int type;
+
+    if (!ctx || !ctx->tb)
+        return MNL_CB_ERROR;
+
+    type = mnl_attr_get_type(attr);
+    if (type <= ctx->max_type)
+        ctx->tb[type] = attr;
+
     return MNL_CB_OK;
+}
+
+static int parse_attrs_limited(const struct nlmsghdr* nlh,
+                               unsigned int offset,
+                               const struct nlattr** tb,
+                               unsigned int max_type) {
+    struct gb_attr_copy_ctx ctx;
+
+    ctx.tb = tb;
+    ctx.max_type = max_type;
+
+    return mnl_attr_parse(nlh, offset, mnl_attr_cb_copy, &ctx);
+}
+
+static int parse_nested_attrs_limited(const struct nlattr* attr, const struct nlattr** tb, unsigned int max_type) {
+    struct gb_attr_copy_ctx ctx;
+
+    ctx.tb = tb;
+    ctx.max_type = max_type;
+
+    return mnl_attr_parse_nested(attr, mnl_attr_cb_copy, &ctx);
 }
 
 /* Approximate message size needed for a gate NEWACTION/REPLACE */
@@ -248,7 +280,7 @@ int build_gate_getaction_ex(struct gb_nl_msg* msg, uint32_t index, uint16_t nlms
 }
 
 int build_gate_getaction(struct gb_nl_msg* msg, uint32_t index) {
-    return build_gate_getaction_ex(msg, index, NLM_F_ACK);
+    return build_gate_getaction_ex(msg, index, 0);
 }
 
 int build_gate_dumpaction(struct gb_nl_msg* msg) {
@@ -297,14 +329,14 @@ void gb_gate_dump_free(struct gate_dump* dump) {
 
 static int parse_gate_entries_cb(const struct nlattr* attr, void* data) {
     struct gate_dump* dump = data;
-    struct nlattr* tb[TCA_GATE_ENTRY_MAX + 1] = {NULL};
+    const struct nlattr* tb[TCA_GATE_ENTRY_MAX + 1] = {NULL};
     struct gate_entry* entry;
     struct gate_entry* new_entries;
 
     if (mnl_attr_get_type(attr) != TCA_GATE_ONE_ENTRY)
         return MNL_CB_OK;
 
-    if (mnl_attr_parse_nested(attr, mnl_attr_cb_copy, tb) < 0)
+    if (parse_nested_attrs_limited(attr, tb, TCA_GATE_ENTRY_MAX) < 0)
         return MNL_CB_ERROR;
 
     new_entries = realloc(dump->entries, sizeof(*new_entries) * (dump->num_entries + 1));
@@ -337,10 +369,10 @@ static int parse_gate_entries_cb(const struct nlattr* attr, void* data) {
     return MNL_CB_OK;
 }
 
-static int parse_gate_options(struct nlattr* attr, struct gate_dump* dump) {
-    struct nlattr* tb[TCA_GATE_MAX + 1] = {NULL};
+static int parse_gate_options(const struct nlattr* attr, struct gate_dump* dump) {
+    const struct nlattr* tb[TCA_GATE_MAX + 1] = {NULL};
 
-    if (mnl_attr_parse_nested(attr, mnl_attr_cb_copy, tb) < 0)
+    if (parse_nested_attrs_limited(attr, tb, TCA_GATE_MAX) < 0)
         return -1;
 
     if (tb[TCA_GATE_PARMS]) {
@@ -380,13 +412,13 @@ static int parse_gate_options(struct nlattr* attr, struct gate_dump* dump) {
     return 0;
 }
 
-static int parse_action_stats(struct nlattr* attr, struct gate_dump* dump) {
-    struct nlattr* tb[TCA_STATS_MAX + 1] = {NULL};
+static int parse_action_stats(const struct nlattr* attr, struct gate_dump* dump) {
+    const struct nlattr* tb[TCA_STATS_MAX + 1] = {NULL};
 
     if (!attr || !dump)
         return -1;
 
-    if (mnl_attr_parse_nested(attr, mnl_attr_cb_copy, tb) < 0)
+    if (parse_nested_attrs_limited(attr, tb, TCA_STATS_MAX) < 0)
         return -1;
 
     if (tb[TCA_STATS_BASIC]) {
@@ -408,9 +440,9 @@ static int parse_action_stats(struct nlattr* attr, struct gate_dump* dump) {
 
 static int parse_action_prio_cb(const struct nlattr* attr, void* data) {
     struct gate_dump* dump = data;
-    struct nlattr* tb[TCA_ACT_MAX + 1] = {NULL};
+    const struct nlattr* tb[TCA_ACT_MAX + 1] = {NULL};
 
-    if (mnl_attr_parse_nested(attr, mnl_attr_cb_copy, tb) < 0)
+    if (parse_nested_attrs_limited(attr, tb, TCA_ACT_MAX) < 0)
         return MNL_CB_ERROR;
 
     if (!tb[TCA_ACT_KIND] || strcmp(mnl_attr_get_str(tb[TCA_ACT_KIND]), "gate") != 0)
@@ -434,7 +466,7 @@ static int parse_action_prio_cb(const struct nlattr* attr, void* data) {
 
 int gb_nl_gate_parse(const struct nlmsghdr* nlh, struct gate_dump* dump) {
     struct tcamsg* tca;
-    struct nlattr* tb[TCA_ROOT_MAX + 1] = {NULL};
+    const struct nlattr* tb[TCA_ROOT_MAX + 1] = {NULL};
 
     if (!nlh || !dump)
         return -EINVAL;
@@ -444,7 +476,7 @@ int gb_nl_gate_parse(const struct nlmsghdr* nlh, struct gate_dump* dump) {
 
     tca = mnl_nlmsg_get_payload(nlh);
 
-    if (mnl_attr_parse(nlh, sizeof(*tca), mnl_attr_cb_copy, tb) < 0)
+    if (parse_attrs_limited(nlh, sizeof(*tca), tb, TCA_ROOT_MAX) < 0)
         return -1;
 
     if (tb[TCA_ACT_TAB]) {

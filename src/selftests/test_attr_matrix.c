@@ -59,7 +59,7 @@ static int build_gate_action_mask(struct gb_nl_msg* msg,
 
     nest_tab = mnl_attr_nest_start(nlh, TCA_ACT_TAB);
     nest_prio = mnl_attr_nest_start(nlh, GATEBENCH_ACT_PRIO);
-    mnl_attr_put_str(nlh, TCA_ACT_KIND, "gate");
+    mnl_attr_put_strz(nlh, TCA_ACT_KIND, "gate");
     mnl_attr_put_u32(nlh, TCA_ACT_INDEX, index);
     nest_opts = mnl_attr_nest_start(nlh, TCA_OPTIONS);
 
@@ -229,11 +229,13 @@ int gb_selftest_attr_matrix(struct gb_nl_sock* sock, uint32_t base_index) {
         ret = build_gate_newaction(msg, base_index, &old_shape, &old_entry, 1, NLM_F_CREATE | NLM_F_EXCL, old_flags,
                                    old_priority);
         if (ret < 0) {
+            gb_selftest_log("mask 0x%02x create/build failed: %d\n", mask, ret);
             test_ret = ret;
             break;
         }
         ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
         if (ret < 0) {
+            gb_selftest_log("mask 0x%02x create/send failed: %d\n", mask, ret);
             test_ret = ret;
             gb_selftest_cleanup_gate(sock, msg, resp, base_index);
             break;
@@ -243,12 +245,14 @@ int gb_selftest_attr_matrix(struct gb_nl_sock* sock, uint32_t base_index) {
         ret = build_gate_replace_mask(msg, base_index, &new_shape, new_entries, 2, new_flags, new_priority, mask, false,
                                       false);
         if (ret < 0) {
+            gb_selftest_log("mask 0x%02x replace/build failed: %d\n", mask, ret);
             test_ret = ret;
             gb_selftest_cleanup_gate(sock, msg, resp, base_index);
             break;
         }
         ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
         if (ret < 0) {
+            gb_selftest_log("mask 0x%02x replace/send failed: %d\n", mask, ret);
             test_ret = ret;
             gb_selftest_cleanup_gate(sock, msg, resp, base_index);
             break;
@@ -256,6 +260,7 @@ int gb_selftest_attr_matrix(struct gb_nl_sock* sock, uint32_t base_index) {
 
         ret = gb_nl_get_action(sock, base_index, &dump, GB_SELFTEST_TIMEOUT_MS);
         if (ret < 0) {
+            gb_selftest_log("mask 0x%02x replace/get failed: %d\n", mask, ret);
             test_ret = ret;
             gb_selftest_cleanup_gate(sock, msg, resp, base_index);
             break;

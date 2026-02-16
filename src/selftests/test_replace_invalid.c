@@ -51,7 +51,7 @@ int gb_selftest_replace_invalid(struct gb_nl_sock* sock, uint32_t base_index) {
 
     nest_tab = mnl_attr_nest_start(nlh, TCA_ACT_TAB);
     nest_prio = mnl_attr_nest_start(nlh, GATEBENCH_ACT_PRIO);
-    mnl_attr_put_str(nlh, TCA_ACT_KIND, "gate");
+    mnl_attr_put_strz(nlh, TCA_ACT_KIND, "gate");
     mnl_attr_put_u32(nlh, TCA_ACT_INDEX, base_index);
     nest_opts = mnl_attr_nest_start(nlh, TCA_OPTIONS);
 

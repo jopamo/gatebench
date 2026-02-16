@@ -21,18 +21,21 @@ int gb_selftest_replace_persistence(struct gb_nl_sock* sock, uint32_t base_index
     /* 1. Create gate with flags=1, priority=10 */
     ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, NLM_F_CREATE | NLM_F_EXCL, 1, 10);
     if (ret < 0) {
+        gb_selftest_log("step create/build failed: %d\n", ret);
         test_ret = ret;
         goto out;
     }
 
     ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
     if (ret < 0) {
+        gb_selftest_log("step create/send failed: %d\n", ret);
         test_ret = ret;
         goto out;
     }
 
     ret = gb_nl_get_action(sock, base_index, &dump, GB_SELFTEST_TIMEOUT_MS);
     if (ret < 0) {
+        gb_selftest_log("step create/get failed: %d\n", ret);
         test_ret = ret;
         goto cleanup;
     }
@@ -47,22 +50,26 @@ int gb_selftest_replace_persistence(struct gb_nl_sock* sock, uint32_t base_index
     gb_nl_msg_reset(msg);
     ret = build_gate_newaction(msg, base_index, &shape, &entry, 1, NLM_F_CREATE | NLM_F_REPLACE, 2, 20);
     if (ret < 0) {
+        gb_selftest_log("step replace/build failed: %d\n", ret);
         test_ret = ret;
         goto cleanup;
     }
 
     ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
     if (ret < 0) {
+        gb_selftest_log("step replace/send failed: %d\n", ret);
         test_ret = ret;
         goto cleanup;
     }
 
     ret = gb_nl_get_action(sock, base_index, &dump, GB_SELFTEST_TIMEOUT_MS);
     if (ret < 0) {
+        gb_selftest_log("step replace/get failed: %d\n", ret);
         test_ret = ret;
         goto cleanup;
     }
     if (dump.flags != 2 || dump.priority != 20) {
+        gb_selftest_log("step replace/verify mismatch: flags=%u prio=%d\n", dump.flags, dump.priority);
         test_ret = -EINVAL;
         gb_gate_dump_free(&dump);
         goto cleanup;
