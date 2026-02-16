@@ -28,6 +28,7 @@ gatebench_sources = files(
   'selftests/test_cycle_time_ext_parsing.c',
   'selftests/test_cycle_time_supplied.c',
   'selftests/test_replace_preserve_schedule.c',
+  'selftests/test_replace_rcu_snapshot.c',
   'selftests/test_replace_append_entries.c',
   'selftests/test_base_time_update.c',
   'selftests/test_multiple_entries.c',

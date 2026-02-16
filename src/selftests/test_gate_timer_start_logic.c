@@ -20,6 +20,12 @@
 #define GB_TIMER_TEST_REPLACE_CYCLE_NS 200000000ULL
 #define GB_TIMER_TEST_TRIGGER_REPLACE_DELAY_NS 5000000000ULL
 #define GB_TIMER_TEST_FINAL_REPLACE_DELAY_NS 1000000000ULL
+#define GB_TIMER_TEST_PHASE_BASE_DELAY_NS 1500000000ULL
+#define GB_TIMER_TEST_PHASE_INTERVAL_NS 250000000ULL
+#define GB_TIMER_TEST_PHASE_CYCLE_NS (GB_TIMER_TEST_PHASE_INTERVAL_NS * 2ULL)
+#define GB_TIMER_TEST_PHASE_OFFSET_NS 80000000ULL
+#define GB_TIMER_TEST_PHASE_MAX_LATE_NS 80000000ULL
+#define GB_TIMER_TEST_PHASE_CYCLES 6u
 #define GB_TIMER_TEST_TRIGGER_ATTEMPTS 64u
 #define GB_TIMER_TEST_TRIGGER_STEP_SLEEP_MS 5u
 #define GB_TIMER_TEST_PRE_REPLACE_WAIT_MS 120u
@@ -27,7 +33,9 @@
 #define GB_TIMER_TEST_PRE_BASE_POLL_MS 25u
 #define GB_TIMER_TEST_POST_BASE_CONFIRM_NS 150000000ULL
 #define GB_TIMER_TEST_POST_BASE_POLL_MS 10u
+#define GB_TIMER_TEST_PHASE_POLL_MS 10u
 #define GB_TIMER_TEST_PROBE_TIMEOUT_US 300000
+#define GB_TIMER_TEST_PHASE_PROBE_TIMEOUT_US 60000
 #define GB_CLSACT_HANDLE 0xFFFF0000U
 
 #if EAGAIN == EWOULDBLOCK
@@ -119,11 +127,11 @@ static void gb_probe_close(struct gb_probe_socket* probe) {
     }
 }
 
-static int gb_probe_set_timeout(int fd) {
+static int gb_probe_set_timeout_us(int fd, suseconds_t timeout_us) {
     struct timeval tv;
 
     tv.tv_sec = 0;
-    tv.tv_usec = GB_TIMER_TEST_PROBE_TIMEOUT_US;
+    tv.tv_usec = timeout_us;
 
     if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0)
         return -errno;
@@ -148,7 +156,7 @@ static int gb_probe_open_port(struct gb_probe_socket* probe, uint16_t port) {
     if (fd_rx < 0)
         return -errno;
 
-    ret = gb_probe_set_timeout(fd_rx);
+    ret = gb_probe_set_timeout_us(fd_rx, GB_TIMER_TEST_PROBE_TIMEOUT_US);
     if (ret < 0) {
         close(fd_rx);
         return ret;
@@ -489,8 +497,10 @@ int gb_selftest_gate_timer_start_logic(struct gb_nl_sock* sock, uint32_t base_in
     struct gb_probe_socket probe;
     struct gate_shape initial_shape;
     struct gate_shape replace_shape;
+    struct gate_shape phase_shape;
     struct gate_entry open_entry;
     struct gate_entry closed_entry;
+    struct gate_entry phase_entries[2];
     enum gb_filter_kind filter_kind = GB_FILTER_NONE;
     unsigned int ifindex_u;
     int ifindex;
@@ -500,11 +510,14 @@ int gb_selftest_gate_timer_start_logic(struct gb_nl_sock* sock, uint32_t base_in
     int64_t now_ns;
     int64_t pre_base_deadline_ns;
     int64_t post_base_check_ns;
+    int64_t phase_check_ns;
+    int64_t phase_now_ns;
     uint8_t probe_marker = 0x21;
     bool qdisc_created = false;
     bool probe_delivered = false;
     bool initial_delivered = false;
     bool late_delivered = true;
+    bool phase_delivered = false;
     uint32_t attempt;
     int ret;
     int test_ret = 0;
@@ -762,6 +775,119 @@ int gb_selftest_gate_timer_start_logic(struct gb_nl_sock* sock, uint32_t base_in
         test_ret = -EINVAL;
         goto cleanup;
     }
+
+    /*
+     * Verify periodic gate transitions across multiple cycles. Probe each
+     * open/closed window at a fixed offset from the scheduled boundary and
+     * require bounded lateness versus target timestamps.
+     */
+    now_ns = gb_now_tai_ns();
+    if (now_ns < 0) {
+        test_ret = (int)now_ns;
+        goto cleanup;
+    }
+
+    gb_selftest_shape_default(&phase_shape, 2);
+    phase_shape.clockid = CLOCK_TAI;
+    phase_shape.base_time = (uint64_t)(now_ns + (int64_t)GB_TIMER_TEST_PHASE_BASE_DELAY_NS);
+    phase_shape.cycle_time = GB_TIMER_TEST_PHASE_CYCLE_NS;
+
+    gb_selftest_entry_default(&phase_entries[0]);
+    phase_entries[0].gate_state = true;
+    phase_entries[0].interval = (uint32_t)GB_TIMER_TEST_PHASE_INTERVAL_NS;
+
+    gb_selftest_entry_default(&phase_entries[1]);
+    phase_entries[1].gate_state = false;
+    phase_entries[1].interval = (uint32_t)GB_TIMER_TEST_PHASE_INTERVAL_NS;
+
+    gb_nl_msg_reset(msg);
+    ret = build_gate_newaction(msg, base_index, &phase_shape, phase_entries, 2, NLM_F_REPLACE, 0, -1);
+    if (ret < 0) {
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    ret = gb_nl_send_recv(sock, msg, resp, GB_SELFTEST_TIMEOUT_MS);
+    if (ret < 0) {
+        gb_selftest_log("phase replace failed: %d\n", ret);
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    ret = gb_probe_set_timeout_us(probe.rx_fd, GB_TIMER_TEST_PHASE_PROBE_TIMEOUT_US);
+    if (ret < 0) {
+        gb_selftest_log("failed to set phase probe timeout: %d\n", ret);
+        test_ret = ret;
+        goto cleanup;
+    }
+
+    for (uint32_t cycle = 0; cycle < GB_TIMER_TEST_PHASE_CYCLES; cycle++) {
+        phase_check_ns = (int64_t)phase_shape.base_time + (int64_t)cycle * (int64_t)GB_TIMER_TEST_PHASE_CYCLE_NS +
+                         (int64_t)GB_TIMER_TEST_PHASE_OFFSET_NS;
+        ret = gb_sleep_until_tai_ns(phase_check_ns, GB_TIMER_TEST_PHASE_POLL_MS);
+        if (ret < 0) {
+            test_ret = ret;
+            goto cleanup;
+        }
+
+        phase_now_ns = gb_now_tai_ns();
+        if (phase_now_ns < 0) {
+            test_ret = (int)phase_now_ns;
+            goto cleanup;
+        }
+        if (phase_now_ns > phase_check_ns + (int64_t)GB_TIMER_TEST_PHASE_MAX_LATE_NS) {
+            gb_selftest_log("phase open check too late: cycle=%u late=%lldns\n", cycle,
+                            (long long)(phase_now_ns - phase_check_ns));
+            test_ret = -ETIME;
+            goto cleanup;
+        }
+
+        ret = gb_probe_send_and_check(&probe, probe_marker++, &phase_delivered);
+        if (ret < 0) {
+            gb_selftest_log("phase open probe failed: cycle=%u err=%d\n", cycle, ret);
+            test_ret = ret;
+            goto cleanup;
+        }
+        if (!phase_delivered) {
+            gb_selftest_log("phase open probe dropped in open window: cycle=%u\n", cycle);
+            test_ret = -EINVAL;
+            goto cleanup;
+        }
+
+        phase_check_ns = (int64_t)phase_shape.base_time + (int64_t)cycle * (int64_t)GB_TIMER_TEST_PHASE_CYCLE_NS +
+                         (int64_t)GB_TIMER_TEST_PHASE_INTERVAL_NS + (int64_t)GB_TIMER_TEST_PHASE_OFFSET_NS;
+        ret = gb_sleep_until_tai_ns(phase_check_ns, GB_TIMER_TEST_PHASE_POLL_MS);
+        if (ret < 0) {
+            test_ret = ret;
+            goto cleanup;
+        }
+
+        phase_now_ns = gb_now_tai_ns();
+        if (phase_now_ns < 0) {
+            test_ret = (int)phase_now_ns;
+            goto cleanup;
+        }
+        if (phase_now_ns > phase_check_ns + (int64_t)GB_TIMER_TEST_PHASE_MAX_LATE_NS) {
+            gb_selftest_log("phase closed check too late: cycle=%u late=%lldns\n", cycle,
+                            (long long)(phase_now_ns - phase_check_ns));
+            test_ret = -ETIME;
+            goto cleanup;
+        }
+
+        ret = gb_probe_send_and_check(&probe, probe_marker++, &phase_delivered);
+        if (ret < 0) {
+            gb_selftest_log("phase closed probe failed: cycle=%u err=%d\n", cycle, ret);
+            test_ret = ret;
+            goto cleanup;
+        }
+        if (phase_delivered) {
+            gb_selftest_log("phase closed probe delivered in closed window: cycle=%u\n", cycle);
+            test_ret = -EINVAL;
+            goto cleanup;
+        }
+    }
+
+    (void)gb_probe_set_timeout_us(probe.rx_fd, GB_TIMER_TEST_PROBE_TIMEOUT_US);
 
 cleanup:
     if (filter_kind != GB_FILTER_NONE)
