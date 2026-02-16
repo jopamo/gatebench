@@ -11,7 +11,6 @@
 
 static const struct gb_selftest_case internal_tests[] = {
     {"schedule pattern", gb_selftest_internal_schedule_pattern, 0},
-    {"gate timer start logic", gb_selftest_gate_timer_start_logic, 0},
 };
 
 static const struct gb_selftest_case stable_tests[] = {
@@ -26,6 +25,7 @@ static const struct gb_selftest_case stable_tests[] = {
     {"replace without existing", gb_selftest_replace_without_existing, 0},
     {"duplicate create", gb_selftest_duplicate_create, -EEXIST},
     {"replace preserve schedule", gb_selftest_replace_preserve_schedule, 0},
+    {"gate timer start logic", gb_selftest_gate_timer_start_logic, 0},
     {"base time update", gb_selftest_base_time_update, 0},
     {"replace persistence", gb_selftest_replace_persistence, 0},
     {"replace preserve attrs", gb_selftest_replace_preserve_attrs, 0},

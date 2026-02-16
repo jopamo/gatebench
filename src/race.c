@@ -105,6 +105,7 @@ struct gb_race_invalid_ctx {
     atomic_bool* stop;
     uint32_t seed;
     uint32_t index;
+    uint32_t live_index;
     int timeout_ms;
     int cpu;
     uint64_t ops;
@@ -649,6 +650,7 @@ static int race_send_basetime_update(struct gb_nl_sock* sock,
                                      const struct gb_config* cfg,
                                      uint32_t index,
                                      uint64_t basetime,
+                                     uint32_t clockid,
                                      const struct gate_entry* entries,
                                      uint32_t num_entries,
                                      int timeout_ms) {
@@ -656,7 +658,7 @@ static int race_send_basetime_update(struct gb_nl_sock* sock,
     int ret;
 
     memset(&shape, 0, sizeof(shape));
-    shape.clockid = cfg ? cfg->clockid : CLOCK_TAI;
+    shape.clockid = clockid;
     shape.base_time = basetime;
 
     /* Prefer configured cycle_time; otherwise derive from current entry list. */
@@ -681,6 +683,46 @@ static int race_send_basetime_update(struct gb_nl_sock* sock,
         return ret;
 
     return gb_nl_send_recv(sock, msg, resp, timeout_ms);
+}
+
+static int race_send_timerstart_replace_live(struct gb_nl_sock* sock,
+                                             struct gb_nl_msg* msg,
+                                             struct gb_nl_msg* resp,
+                                             const struct gb_config* cfg,
+                                             uint32_t index,
+                                             uint32_t* seed,
+                                             int timeout_ms) {
+    struct gate_dump dump;
+    uint32_t clockid;
+    uint64_t now;
+    uint64_t basetime;
+    int ret;
+
+    if (!seed)
+        return -EINVAL;
+
+    memset(&dump, 0, sizeof(dump));
+    ret = gb_nl_get_action(sock, index, &dump, timeout_ms);
+    if (ret < 0)
+        return ret;
+
+    if (!dump.entries || dump.num_entries == 0u) {
+        gb_gate_dump_free(&dump);
+        return -ENOENT;
+    }
+    if (dump.num_entries > GB_MAX_ENTRIES) {
+        gb_gate_dump_free(&dump);
+        return -E2BIG;
+    }
+
+    clockid = (rng_range(seed, 2u) == 0u) ? CLOCK_TAI : CLOCK_MONOTONIC;
+    now = race_clock_now_ns((clockid_t)clockid);
+    basetime = now + 1u + (uint64_t)rng_range(seed, RACE_BASETIME_JITTER_NS);
+
+    ret = race_send_basetime_update(sock, msg, resp, cfg, index, basetime, clockid, dump.entries, dump.num_entries,
+                                    timeout_ms);
+    gb_gate_dump_free(&dump);
+    return ret;
 }
 
 static uint32_t race_fill_entries(struct gate_entry* entries,
@@ -1003,6 +1045,7 @@ static void* race_invalid_thread(void* arg) {
     struct gb_nl_msg* resp = NULL;
     struct gb_nl_msg* del_msg = NULL;
     uint32_t base_index;
+    size_t msg_cap;
     int ret;
 
     race_pin_thread("invalid", ctx->cpu);
@@ -1013,7 +1056,12 @@ static void* race_invalid_thread(void* arg) {
         return NULL;
     }
 
-    msg = gb_nl_msg_alloc(2048u);
+    /*
+     * This thread now issues live REPLACE updates that may include the full
+     * current schedule; size the request buffer accordingly.
+     */
+    msg_cap = gate_msg_capacity(GB_MAX_ENTRIES, 0);
+    msg = gb_nl_msg_alloc(msg_cap);
     resp = gb_nl_msg_alloc((size_t)MNL_SOCKET_BUFFER_SIZE);
     del_msg = gb_nl_msg_alloc(1024u);
     if (!msg || !resp || !del_msg) {
@@ -1024,6 +1072,18 @@ static void* race_invalid_thread(void* arg) {
     base_index = ctx->index;
 
     while (!atomic_load_explicit(ctx->stop, memory_order_relaxed)) {
+        if ((ctx->ops & 1u) == 0u) {
+            ret = race_send_timerstart_replace_live(sock, msg, resp, ctx->cfg, ctx->live_index, &ctx->seed,
+                                                    ctx->timeout_ms);
+            if (ret < 0 && ret != -ENOENT)
+                race_record_nl_error(&ctx->errors, ctx->err_counts, &ctx->extack, ret, resp);
+
+            ctx->ops++;
+            if ((ctx->ops & 0xffu) == 0u)
+                usleep(100);
+            continue;
+        }
+
         uint32_t which = ctx->seed++ % RACE_INVALID_CASES;
         uint32_t index = base_index + which;
 
@@ -1120,8 +1180,8 @@ static void* race_basetime_thread(void* arg) {
                 race_record_err(&ctx->errors, ctx->err_counts, ret);
         }
         else {
-            ret = race_send_basetime_update(sock, msg, resp, ctx->cfg, ctx->index, basetime, dump.entries,
-                                            dump.num_entries, ctx->timeout_ms);
+            ret = race_send_basetime_update(sock, msg, resp, ctx->cfg, ctx->index, basetime, ctx->cfg->clockid,
+                                            dump.entries, dump.num_entries, ctx->timeout_ms);
             gb_gate_dump_free(&dump);
 
             if (ret < 0) {
@@ -1258,6 +1318,7 @@ int gb_race_run(const struct gb_config* cfg) {
         .stop = &stop,
         .seed = RACE_SEED_BASE ^ 0x99999999u,
         .index = invalid_base,
+        .live_index = cfg->index,
         .timeout_ms = cfg->timeout_ms,
         .cpu = cpu_count > 0 ? cpus[6 % cpu_count] : -1,
         .ops = 0,
@@ -1283,6 +1344,8 @@ int gb_race_run(const struct gb_config* cfg) {
         printf("Race thread CPUs: replace=%d dump=%d get=%d traffic=%d basetime=%d delete=%d invalid=%d\n",
                replace_ctx.cpu, dump_ctx.cpu, get_ctx.cpu, traffic_ctx.cpu, basetime_ctx.cpu, delete_ctx.cpu,
                invalid_ctx.cpu);
+        printf("Race invalid thread: valid REPLACE timer-start trigger targets live index %u\n",
+               invalid_ctx.live_index);
     }
 
     ret = pthread_create(&replace_thread, NULL, race_replace_thread, &replace_ctx);
