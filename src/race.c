@@ -57,6 +57,8 @@
 #define RACE_INVALID_CASES 8u
 #define RACE_BASETIME_JITTER_NS 10000000u
 #define RACE_THREAD_COUNT GB_RACE_THREAD_COUNT
+#define RACE_PAIR_COUNT (RACE_THREAD_COUNT / 2u)
+#define RACE_PAIR_SWAP_SLICE_NS 1000000000ull
 
 #ifndef NLM_F_ACK_TLVS
 #define NLM_F_ACK_TLVS 0x200
@@ -65,6 +67,23 @@
 #ifndef NLMSGERR_ATTR_MSG
 #define NLMSGERR_ATTR_MSG 1
 #endif
+
+_Static_assert((RACE_THREAD_COUNT % 2u) == 0u, "RACE_THREAD_COUNT must be even for pair shuffling");
+
+struct race_sync_profile {
+    float alpha;
+    int min_samples;
+    float max_dev_ratio;
+};
+
+static const char* const race_worker_names[RACE_THREAD_COUNT] = {
+    "replace", "dump", "get", "traffic", "basetime", "delete", "invalid", "traffic_sync",
+};
+
+static const struct race_sync_profile race_worker_profiles[RACE_THREAD_COUNT] = {
+    {0.30f, 256, 0.15f}, {0.25f, 192, 0.15f}, {0.25f, 192, 0.15f}, {0.25f, 192, 0.20f},
+    {0.30f, 256, 0.15f}, {0.30f, 256, 0.15f}, {0.30f, 256, 0.15f}, {0.25f, 192, 0.20f},
+};
 
 static void race_set_attr_len_unaligned(struct nlmsghdr* nlh, size_t attr_offset, uint16_t attr_len) {
     memcpy((char*)nlh + attr_offset + offsetof(struct nlattr, nla_len), &attr_len, sizeof(attr_len));
@@ -1367,27 +1386,20 @@ int gb_race_run_with_summary(const struct gb_config* cfg, struct gb_race_summary
     struct gb_race_sync_ctx traffic_sync_ctx;
     struct gb_race_invalid_ctx invalid_ctx;
     struct gb_race_update_ctx basetime_ctx;
-    struct tst_fzsync_pair replace_delete_sync;
-    struct tst_fzsync_pair basetime_invalid_sync;
-    struct tst_fzsync_pair dump_get_sync;
-    struct tst_fzsync_pair traffic_pair_sync;
-    pthread_t replace_thread;
-    pthread_t dump_thread;
-    pthread_t get_thread;
-    pthread_t delete_thread;
-    pthread_t traffic_thread;
-    pthread_t traffic_sync_thread;
-    pthread_t invalid_thread;
-    pthread_t basetime_thread;
+    struct tst_fzsync_pair sync_pairs[RACE_PAIR_COUNT];
+    pthread_t threads[RACE_THREAD_COUNT];
     int cpus[RACE_THREAD_COUNT];
     int cpu_count;
     uint32_t base_interval;
     uint32_t interval_max;
     uint32_t max_entries;
     uint32_t invalid_base;
-    uint64_t sleep_ns;
-    int ret;
-    int created = 0;
+    uint32_t pair_seed;
+    uint64_t total_ns;
+    uint64_t remaining_ns;
+    unsigned int phase_total;
+    unsigned int phase = 0;
+    int ret = 0;
 
     if (summary)
         memset(summary, 0, sizeof(*summary));
@@ -1415,11 +1427,6 @@ int gb_race_run_with_summary(const struct gb_config* cfg, struct gb_race_summary
     if (invalid_base < cfg->index)
         invalid_base = cfg->index;
 
-    /* Pair all netlink workers into two-way fuzzy race windows. */
-    race_sync_pair_init(&replace_delete_sync, 0.30f, 256, 0.15f);
-    race_sync_pair_init(&basetime_invalid_sync, 0.30f, 256, 0.15f);
-    race_sync_pair_init(&dump_get_sync, 0.25f, 192, 0.15f);
-    race_sync_pair_init(&traffic_pair_sync, 0.25f, 192, 0.20f);
     gb_fzsync_seed(RACE_SEED_BASE ^ cfg->index ^ cfg->race_seconds);
     gb_fzsync_set_info(cfg->verbose && !cfg->json);
 
@@ -1433,7 +1440,7 @@ int gb_race_run_with_summary(const struct gb_config* cfg, struct gb_race_summary
     replace_ctx = (struct gb_race_nl_ctx){
         .cfg = cfg,
         .stop = &stop,
-        .sync_pair = &replace_delete_sync,
+        .sync_pair = NULL,
         .sync_is_a = true,
         .seed = RACE_SEED_BASE ^ 0x11111111u,
         .index = cfg->index,
@@ -1448,7 +1455,7 @@ int gb_race_run_with_summary(const struct gb_config* cfg, struct gb_race_summary
     dump_ctx = (struct gb_race_dump_ctx){
         .cfg = cfg,
         .stop = &stop,
-        .sync_pair = &dump_get_sync,
+        .sync_pair = NULL,
         .sync_is_a = true,
         .index = cfg->index,
         .timeout_ms = cfg->timeout_ms,
@@ -1459,7 +1466,7 @@ int gb_race_run_with_summary(const struct gb_config* cfg, struct gb_race_summary
 
     get_ctx = (struct gb_race_get_ctx){
         .stop = &stop,
-        .sync_pair = &dump_get_sync,
+        .sync_pair = NULL,
         .sync_is_a = false,
         .index = cfg->index,
         .timeout_ms = cfg->timeout_ms,
@@ -1471,7 +1478,7 @@ int gb_race_run_with_summary(const struct gb_config* cfg, struct gb_race_summary
     delete_ctx = (struct gb_race_nl_ctx){
         .cfg = cfg,
         .stop = &stop,
-        .sync_pair = &replace_delete_sync,
+        .sync_pair = NULL,
         .sync_is_a = false,
         .seed = RACE_SEED_BASE ^ 0x33333333u,
         .index = cfg->index,
@@ -1485,7 +1492,7 @@ int gb_race_run_with_summary(const struct gb_config* cfg, struct gb_race_summary
 
     traffic_ctx = (struct gb_race_traffic_ctx){
         .stop = &stop,
-        .sync_pair = &traffic_pair_sync,
+        .sync_pair = NULL,
         .sync_is_a = true,
         .seed = RACE_SEED_BASE ^ 0x77777777u,
         .cpu = cpu_count > 0 ? cpus[3 % cpu_count] : -1,
@@ -1495,7 +1502,7 @@ int gb_race_run_with_summary(const struct gb_config* cfg, struct gb_race_summary
 
     traffic_sync_ctx = (struct gb_race_sync_ctx){
         .stop = &stop,
-        .sync_pair = &traffic_pair_sync,
+        .sync_pair = NULL,
         .sync_is_a = false,
         .cpu = cpu_count > 0 ? cpus[7 % cpu_count] : -1,
         .ops = 0,
@@ -1504,7 +1511,7 @@ int gb_race_run_with_summary(const struct gb_config* cfg, struct gb_race_summary
     invalid_ctx = (struct gb_race_invalid_ctx){
         .cfg = cfg,
         .stop = &stop,
-        .sync_pair = &basetime_invalid_sync,
+        .sync_pair = NULL,
         .sync_is_a = false,
         .seed = RACE_SEED_BASE ^ 0x99999999u,
         .index = invalid_base,
@@ -1518,7 +1525,7 @@ int gb_race_run_with_summary(const struct gb_config* cfg, struct gb_race_summary
     basetime_ctx = (struct gb_race_update_ctx){
         .cfg = cfg,
         .stop = &stop,
-        .sync_pair = &basetime_invalid_sync,
+        .sync_pair = NULL,
         .sync_is_a = true,
         .seed = RACE_SEED_BASE ^ 0x55555555u,
         .index = cfg->index,
@@ -1528,90 +1535,124 @@ int gb_race_run_with_summary(const struct gb_config* cfg, struct gb_race_summary
         .errors = 0,
     };
 
-    if (!cfg->json) {
-        if (cpu_count < (int)RACE_THREAD_COUNT) {
-            printf("Note: only %d CPU%s available; race threads will share CPUs\n", cpu_count,
-                   cpu_count == 1 ? "" : "s");
+    {
+        struct tst_fzsync_pair** const worker_pair_refs[RACE_THREAD_COUNT] = {
+            &replace_ctx.sync_pair,  &dump_ctx.sync_pair,   &get_ctx.sync_pair,     &traffic_ctx.sync_pair,
+            &basetime_ctx.sync_pair, &delete_ctx.sync_pair, &invalid_ctx.sync_pair, &traffic_sync_ctx.sync_pair,
+        };
+        bool* const worker_side_refs[RACE_THREAD_COUNT] = {
+            &replace_ctx.sync_is_a,  &dump_ctx.sync_is_a,   &get_ctx.sync_is_a,     &traffic_ctx.sync_is_a,
+            &basetime_ctx.sync_is_a, &delete_ctx.sync_is_a, &invalid_ctx.sync_is_a, &traffic_sync_ctx.sync_is_a,
+        };
+        void* (*const worker_fns[RACE_THREAD_COUNT])(void*) = {
+            race_replace_thread,  race_dump_thread,   race_get_thread,     race_traffic_thread,
+            race_basetime_thread, race_delete_thread, race_invalid_thread, race_sync_partner_thread,
+        };
+        void* const worker_args[RACE_THREAD_COUNT] = {
+            &replace_ctx,  &dump_ctx,   &get_ctx,     &traffic_ctx,
+            &basetime_ctx, &delete_ctx, &invalid_ctx, &traffic_sync_ctx,
+        };
+
+        total_ns = (uint64_t)cfg->race_seconds * 1000000000ull;
+        remaining_ns = total_ns;
+        phase_total = (unsigned int)((total_ns + RACE_PAIR_SWAP_SLICE_NS - 1ull) / RACE_PAIR_SWAP_SLICE_NS);
+        pair_seed = RACE_SEED_BASE ^ cfg->index ^ cfg->race_seconds ^ 0x9e3779b9u;
+
+        if (!cfg->json) {
+            if (cpu_count < (int)RACE_THREAD_COUNT) {
+                printf("Note: only %d CPU%s available; race threads will share CPUs\n", cpu_count,
+                       cpu_count == 1 ? "" : "s");
+            }
+            printf(
+                "Race thread CPUs: replace=%d dump=%d get=%d traffic=%d basetime=%d delete=%d invalid=%d "
+                "traffic_sync=%d\n",
+                replace_ctx.cpu, dump_ctx.cpu, get_ctx.cpu, traffic_ctx.cpu, basetime_ctx.cpu, delete_ctx.cpu,
+                invalid_ctx.cpu, traffic_sync_ctx.cpu);
+            printf("Race fuzzy sync: dynamic pair shuffling enabled (swap interval: %llu ms)\n",
+                   (unsigned long long)(RACE_PAIR_SWAP_SLICE_NS / 1000000ull));
+            printf("Race invalid thread: valid REPLACE timer-start trigger targets live index %u\n",
+                   invalid_ctx.live_index);
         }
-        printf(
-            "Race thread CPUs: replace=%d dump=%d get=%d traffic=%d basetime=%d delete=%d invalid=%d traffic_sync=%d\n",
-            replace_ctx.cpu, dump_ctx.cpu, get_ctx.cpu, traffic_ctx.cpu, basetime_ctx.cpu, delete_ctx.cpu,
-            invalid_ctx.cpu, traffic_sync_ctx.cpu);
-        printf("Race fuzzy sync: replace/delete + basetime/invalid + dump/get + traffic/traffic_sync pairs enabled\n");
-        printf("Race invalid thread: valid REPLACE timer-start trigger targets live index %u\n",
-               invalid_ctx.live_index);
+
+        while (remaining_ns > 0 && ret == 0) {
+            unsigned int order[RACE_THREAD_COUNT];
+            unsigned int pair_members[RACE_PAIR_COUNT][2];
+            bool pair_member_is_a[RACE_PAIR_COUNT][2];
+            uint64_t phase_ns = remaining_ns > RACE_PAIR_SWAP_SLICE_NS ? RACE_PAIR_SWAP_SLICE_NS : remaining_ns;
+            unsigned int created = 0;
+
+            for (unsigned int i = 0; i < RACE_THREAD_COUNT; i++)
+                order[i] = i;
+
+            for (unsigned int i = RACE_THREAD_COUNT - 1u; i > 0u; i--) {
+                unsigned int j = rng_range(&pair_seed, i + 1u);
+                unsigned int tmp = order[i];
+                order[i] = order[j];
+                order[j] = tmp;
+            }
+
+            for (unsigned int pair_idx = 0; pair_idx < RACE_PAIR_COUNT; pair_idx++) {
+                unsigned int first = order[pair_idx * 2u];
+                unsigned int second = order[pair_idx * 2u + 1u];
+                const struct race_sync_profile* first_profile = &race_worker_profiles[first];
+                const struct race_sync_profile* second_profile = &race_worker_profiles[second];
+                float alpha = (first_profile->alpha + second_profile->alpha) * 0.5f;
+                int min_samples = (first_profile->min_samples + second_profile->min_samples) / 2;
+                float max_dev_ratio = first_profile->max_dev_ratio > second_profile->max_dev_ratio
+                                          ? first_profile->max_dev_ratio
+                                          : second_profile->max_dev_ratio;
+                bool first_is_a = rng_range(&pair_seed, 2u) == 0u;
+
+                race_sync_pair_init(&sync_pairs[pair_idx], alpha, min_samples, max_dev_ratio);
+                *worker_pair_refs[first] = &sync_pairs[pair_idx];
+                *worker_side_refs[first] = first_is_a;
+                *worker_pair_refs[second] = &sync_pairs[pair_idx];
+                *worker_side_refs[second] = !first_is_a;
+                pair_members[pair_idx][0] = first;
+                pair_members[pair_idx][1] = second;
+                pair_member_is_a[pair_idx][0] = first_is_a;
+                pair_member_is_a[pair_idx][1] = !first_is_a;
+            }
+
+            if (!cfg->json && cfg->verbose) {
+                printf("Race fuzzy sync phase %u/%u:", phase + 1u, phase_total);
+                for (unsigned int pair_idx = 0; pair_idx < RACE_PAIR_COUNT; pair_idx++) {
+                    unsigned int first = pair_members[pair_idx][0];
+                    unsigned int second = pair_members[pair_idx][1];
+                    printf(" [%s(%c)<->%s(%c)]", race_worker_names[first], pair_member_is_a[pair_idx][0] ? 'A' : 'B',
+                           race_worker_names[second], pair_member_is_a[pair_idx][1] ? 'A' : 'B');
+                }
+                printf("\n");
+            }
+
+            atomic_store_explicit(&stop, false, memory_order_relaxed);
+
+            for (unsigned int i = 0; i < RACE_THREAD_COUNT; i++) {
+                ret = pthread_create(&threads[i], NULL, worker_fns[i], worker_args[i]);
+                if (ret != 0)
+                    break;
+                created++;
+            }
+
+            if (ret == 0)
+                (void)gb_util_sleep_ns(phase_ns);
+
+            atomic_store_explicit(&stop, true, memory_order_relaxed);
+            for (unsigned int i = 0; i < RACE_PAIR_COUNT; i++)
+                race_sync_signal_exit(&sync_pairs[i]);
+
+            for (unsigned int i = 0; i < created; i++)
+                pthread_join(threads[i], NULL);
+            for (unsigned int i = 0; i < RACE_PAIR_COUNT; i++)
+                tst_fzsync_pair_cleanup(&sync_pairs[i]);
+
+            if (ret != 0)
+                break;
+
+            remaining_ns -= phase_ns;
+            phase++;
+        }
     }
-
-    ret = pthread_create(&replace_thread, NULL, race_replace_thread, &replace_ctx);
-    if (ret != 0)
-        return -ret;
-    created++;
-
-    ret = pthread_create(&dump_thread, NULL, race_dump_thread, &dump_ctx);
-    if (ret != 0)
-        goto out_stop;
-    created++;
-
-    ret = pthread_create(&get_thread, NULL, race_get_thread, &get_ctx);
-    if (ret != 0)
-        goto out_stop;
-    created++;
-
-    ret = pthread_create(&traffic_thread, NULL, race_traffic_thread, &traffic_ctx);
-    if (ret != 0)
-        goto out_stop;
-    created++;
-
-    ret = pthread_create(&traffic_sync_thread, NULL, race_sync_partner_thread, &traffic_sync_ctx);
-    if (ret != 0)
-        goto out_stop;
-    created++;
-
-    ret = pthread_create(&basetime_thread, NULL, race_basetime_thread, &basetime_ctx);
-    if (ret != 0)
-        goto out_stop;
-    created++;
-
-    ret = pthread_create(&delete_thread, NULL, race_delete_thread, &delete_ctx);
-    if (ret != 0)
-        goto out_stop;
-    created++;
-
-    ret = pthread_create(&invalid_thread, NULL, race_invalid_thread, &invalid_ctx);
-    if (ret != 0)
-        goto out_stop;
-    created++;
-
-    sleep_ns = (uint64_t)cfg->race_seconds * 1000000000ull;
-    (void)gb_util_sleep_ns(sleep_ns);
-
-out_stop:
-    atomic_store_explicit(&stop, true, memory_order_relaxed);
-    race_sync_signal_exit(&replace_delete_sync);
-    race_sync_signal_exit(&basetime_invalid_sync);
-    race_sync_signal_exit(&dump_get_sync);
-    race_sync_signal_exit(&traffic_pair_sync);
-
-    if (created > 0)
-        pthread_join(replace_thread, NULL);
-    if (created > 1)
-        pthread_join(dump_thread, NULL);
-    if (created > 2)
-        pthread_join(get_thread, NULL);
-    if (created > 3)
-        pthread_join(traffic_thread, NULL);
-    if (created > 4)
-        pthread_join(traffic_sync_thread, NULL);
-    if (created > 5)
-        pthread_join(basetime_thread, NULL);
-    if (created > 6)
-        pthread_join(delete_thread, NULL);
-    if (created > 7)
-        pthread_join(invalid_thread, NULL);
-    tst_fzsync_pair_cleanup(&replace_delete_sync);
-    tst_fzsync_pair_cleanup(&basetime_invalid_sync);
-    tst_fzsync_pair_cleanup(&dump_get_sync);
-    tst_fzsync_pair_cleanup(&traffic_pair_sync);
 
     if (summary) {
         summary->completed = ret == 0;

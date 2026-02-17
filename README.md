@@ -69,14 +69,14 @@ Expected output shape:
 ```text
 Running race mode for 1 seconds...
 Race thread CPUs: replace=... dump=... get=... traffic=... basetime=... delete=... invalid=... traffic_sync=...
-Race fuzzy sync: replace/delete + basetime/invalid + dump/get + traffic/traffic_sync pairs enabled
+Race fuzzy sync: dynamic pair shuffling enabled (swap interval: 1000 ms)
 Race mode completed (1 seconds)
   Replace ops: ..., errors: ...
   ...
   <thread> error breakdown:
 ```
 
-What just happened: gatebench launched concurrent worker threads, synchronized key thread pairs with fuzzy timing windows, then printed per-thread operation and error summaries.
+What just happened: gatebench launched concurrent worker threads, repeatedly reshuffled fuzzy-sync thread pairs over the run window, then printed per-thread operation and error summaries.
 
 ## Common workflows
 
@@ -172,7 +172,7 @@ Correction: index is the kernel object identity for operations.
 
 ### 4) Race mode is synchronized contention, not deterministic replay
 
-`--race` mode runs several worker threads and uses fuzzy synchronization windows to increase overlap probability across operation pairs. It improves race exposure probability but does not guarantee identical timing across runs.
+`--race` mode runs several worker threads and uses fuzzy synchronization windows to increase overlap probability across operation pairs, reshuffling pair membership during the run. It improves race exposure probability but does not guarantee identical timing across runs.
 
 Wrong assumption: "same seed/time always reproduces same interleaving."
 Correction: scheduler/kernel timing still dominates exact ordering.
@@ -218,7 +218,7 @@ Why dangerous: very high iteration and run counts increase total wall time and m
 
 - Performance model:
   - benchmark mode performs two timed netlink transactions per iteration (`create` + `replace`), plus warmup and cleanup calls.
-  - race mode uses 8 worker threads with paired fuzzy-sync windows.
+  - race mode uses 8 worker threads with fuzzy-sync windows that reshuffle thread pairings during the run.
 - Memory behavior:
   - benchmark samples are stored in memory for percentile/stat calculation.
   - rough sample count is `2 * iters` when sampling is off, or `~2 * (iters / sample_every)` when sampling is on.
