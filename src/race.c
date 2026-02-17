@@ -76,6 +76,17 @@ struct race_sync_profile {
     float max_dev_ratio;
 };
 
+enum race_worker_id {
+    RACE_WORKER_REPLACE = 0u,
+    RACE_WORKER_DUMP = 1u,
+    RACE_WORKER_GET = 2u,
+    RACE_WORKER_TRAFFIC = 3u,
+    RACE_WORKER_BASETIME = 4u,
+    RACE_WORKER_DELETE = 5u,
+    RACE_WORKER_INVALID = 6u,
+    RACE_WORKER_TRAFFIC_SYNC = 7u,
+};
+
 static const char* const race_worker_names[RACE_THREAD_COUNT] = {
     "replace", "dump", "get", "traffic", "basetime", "delete", "invalid", "traffic_sync",
 };
@@ -1568,32 +1579,70 @@ int gb_race_run_with_summary(const struct gb_config* cfg, struct gb_race_summary
                 "traffic_sync=%d\n",
                 replace_ctx.cpu, dump_ctx.cpu, get_ctx.cpu, traffic_ctx.cpu, basetime_ctx.cpu, delete_ctx.cpu,
                 invalid_ctx.cpu, traffic_sync_ctx.cpu);
-            printf("Race fuzzy sync: dynamic pair shuffling enabled (swap interval: %llu ms)\n",
+            printf("Race fuzzy sync: dynamic pair shuffling with core hazard coverage (swap interval: %llu ms)\n",
                    (unsigned long long)(RACE_PAIR_SWAP_SLICE_NS / 1000000ull));
             printf("Race invalid thread: valid REPLACE timer-start trigger targets live index %u\n",
                    invalid_ctx.live_index);
         }
 
         while (remaining_ns > 0 && ret == 0) {
-            unsigned int order[RACE_THREAD_COUNT];
+            unsigned int replacement_workers[3] = {RACE_WORKER_REPLACE, RACE_WORKER_BASETIME, RACE_WORKER_INVALID};
+            unsigned int reader_workers[3] = {RACE_WORKER_DUMP, RACE_WORKER_GET, RACE_WORKER_TRAFFIC};
+            unsigned int pair_order[RACE_PAIR_COUNT] = {0u, 1u, 2u, 3u};
+            unsigned int candidate_pairs[RACE_PAIR_COUNT][2];
             unsigned int pair_members[RACE_PAIR_COUNT][2];
             bool pair_member_is_a[RACE_PAIR_COUNT][2];
             uint64_t phase_ns = remaining_ns > RACE_PAIR_SWAP_SLICE_NS ? RACE_PAIR_SWAP_SLICE_NS : remaining_ns;
             unsigned int created = 0;
+            unsigned int reader_for_a;
+            unsigned int reader_for_tail;
 
-            for (unsigned int i = 0; i < RACE_THREAD_COUNT; i++)
-                order[i] = i;
-
-            for (unsigned int i = RACE_THREAD_COUNT - 1u; i > 0u; i--) {
+            for (unsigned int i = 2u; i > 0u; i--) {
                 unsigned int j = rng_range(&pair_seed, i + 1u);
-                unsigned int tmp = order[i];
-                order[i] = order[j];
-                order[j] = tmp;
+                unsigned int tmp = replacement_workers[i];
+                replacement_workers[i] = replacement_workers[j];
+                replacement_workers[j] = tmp;
+            }
+
+            for (unsigned int i = 2u; i > 0u; i--) {
+                unsigned int j = rng_range(&pair_seed, i + 1u);
+                unsigned int tmp = reader_workers[i];
+                reader_workers[i] = reader_workers[j];
+                reader_workers[j] = tmp;
+            }
+
+            candidate_pairs[0][0] = replacement_workers[0];
+            candidate_pairs[0][1] = replacement_workers[1];
+
+            candidate_pairs[1][0] = RACE_WORKER_DELETE;
+            candidate_pairs[1][1] = reader_workers[0];
+
+            if (rng_range(&pair_seed, 2u) == 0u) {
+                reader_for_a = reader_workers[1];
+                reader_for_tail = reader_workers[2];
+            }
+            else {
+                reader_for_a = reader_workers[2];
+                reader_for_tail = reader_workers[1];
+            }
+
+            candidate_pairs[2][0] = replacement_workers[2];
+            candidate_pairs[2][1] = reader_for_a;
+
+            candidate_pairs[3][0] = reader_for_tail;
+            candidate_pairs[3][1] = RACE_WORKER_TRAFFIC_SYNC;
+
+            for (unsigned int i = RACE_PAIR_COUNT - 1u; i > 0u; i--) {
+                unsigned int j = rng_range(&pair_seed, i + 1u);
+                unsigned int tmp = pair_order[i];
+                pair_order[i] = pair_order[j];
+                pair_order[j] = tmp;
             }
 
             for (unsigned int pair_idx = 0; pair_idx < RACE_PAIR_COUNT; pair_idx++) {
-                unsigned int first = order[pair_idx * 2u];
-                unsigned int second = order[pair_idx * 2u + 1u];
+                unsigned int selected_pair = pair_order[pair_idx];
+                unsigned int first = candidate_pairs[selected_pair][0];
+                unsigned int second = candidate_pairs[selected_pair][1];
                 const struct race_sync_profile* first_profile = &race_worker_profiles[first];
                 const struct race_sync_profile* second_profile = &race_worker_profiles[second];
                 float alpha = (first_profile->alpha + second_profile->alpha) * 0.5f;

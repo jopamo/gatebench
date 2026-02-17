@@ -69,7 +69,7 @@ Expected output shape:
 ```text
 Running race mode for 1 seconds...
 Race thread CPUs: replace=... dump=... get=... traffic=... basetime=... delete=... invalid=... traffic_sync=...
-Race fuzzy sync: dynamic pair shuffling enabled (swap interval: 1000 ms)
+Race fuzzy sync: dynamic pair shuffling with core hazard coverage (swap interval: 1000 ms)
 Race mode completed (1 seconds)
   Replace ops: ..., errors: ...
   ...
@@ -172,7 +172,7 @@ Correction: index is the kernel object identity for operations.
 
 ### 4) Race mode is synchronized contention, not deterministic replay
 
-`--race` mode runs several worker threads and uses fuzzy synchronization windows to increase overlap probability across operation pairs, reshuffling pair membership during the run. It improves race exposure probability but does not guarantee identical timing across runs.
+`--race` mode runs several worker threads and uses fuzzy synchronization windows to increase overlap probability across operation pairs, reshuffling pair membership during the run. The per-phase pairing policy always includes replacement-vs-reader, delete-vs-reader, and replacement-vs-replacement contention. It improves race exposure probability but does not guarantee identical timing across runs.
 
 Wrong assumption: "same seed/time always reproduces same interleaving."
 Correction: scheduler/kernel timing still dominates exact ordering.
